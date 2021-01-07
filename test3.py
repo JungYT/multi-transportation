@@ -1,5 +1,6 @@
 import numpy as np
 from fym.core import BaseEnv, BaseSystem
+import fym.core as core
 import fym.logging as logging
 
 x0 = [0, 10, 20]
@@ -32,7 +33,10 @@ class Env(BaseEnv):
         return done
 
     def set_dot(self, t):
-        self.sys.set_dot
+        for system in self.sys.systems:
+            pos, vel = system.state
+            system.set_dot(pos)
+
 
 def main():
     env = Env()

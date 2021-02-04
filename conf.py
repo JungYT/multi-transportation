@@ -15,7 +15,7 @@ PAYLOAD = {
             "vel" : np.vstack((0, 0, 0)),
             "dcm" : rot.angle2dcm(0, 0, 0),
             "omega" : np.vstack((0, 0, 0)),
-            "m" : 10        # kg
+            "m" : 10,        # kg
             "J" : np.diag([0.5, 0.5, 0.5]),
 }
 

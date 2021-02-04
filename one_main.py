@@ -2,14 +2,14 @@ import numpy as np
 from fym.core import BaseEnv, BaseSystem
 from fym.models.quadrotor import Quadrotor
 import fym.logging as logging
-import config
+import conf
 import fym.utils.rot as rot
 import fym.utils.linearization as lin
 import fym.agents.LQR as lqr
 
-
-quad = Quadrotor(config.INIT_POS, config.INIT_VEL, config.INIT_DCM,
-                 config.INIT_OMEGA)
+x0 = np.array([0, 0, 0])
+quad = Quadrotor(x0, x0, conf.QUADROTOR["dcm"],
+                 conf.QUADROTOR["omega"])
 class Quad(BaseEnv):
     def __init__(self):
         super().__init__()

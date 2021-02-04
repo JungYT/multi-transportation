@@ -3,7 +3,7 @@ import fym.logging as logging
 import fym.plotting as plotting
 import matplotlib.pyplot as plt
 import os
-import config
+import conf
 import fym.utils.rot as rot
 #import keyboard
 

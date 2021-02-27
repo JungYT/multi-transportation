@@ -32,13 +32,13 @@ class Payload(BaseEnv):
 
 
 class Link(BaseEnv):
-    l = conf.LINK["l"]
 
     def __init__(self, q, omega, rho):
         super().__init__()
         self.q = BaseSystem(q)
         self.omega = BaseSystem(omega)
         self.rho = rho
+        self.l = conf.LINK["l"]
 
     def set_dot(self, A, B, C, Mq, S1, S2, R0, omega0, u):
         q, omega = self.state

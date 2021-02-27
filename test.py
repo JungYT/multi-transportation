@@ -2,7 +2,7 @@ import fym.utils.linearization as lin
 import numpy as np
 
 
-class temp():
+class temp:
     def __init__(self):
         self.a = 1
 
@@ -12,11 +12,14 @@ class temp():
         ddcm = pos * dcm + control
         return dpos, dvel, ddcm
 
+
 tmp = temp()
+
 
 def func2(state, control):
     pos, vel, dcm = state
     return np.vstack(tmp.func(pos, vel, dcm, control))
+
 
 jacob = lin.jacob_analytic(func2)
 jacob2 = lin.jacob_analytic(func2, i=1)

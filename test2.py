@@ -11,5 +11,3 @@ import fym.agents.LQR as lqr
 class Test2(Env):
     def __init__(self):
         super().__init__()
-
-

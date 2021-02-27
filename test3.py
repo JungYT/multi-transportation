@@ -11,7 +11,7 @@ class Model(BaseEnv):
         super().__init__()
         self.pos = BaseSystem(pos)
         self.vel = BaseSystem(pos)
-        self.m = 1.
+        self.m = 1.0
 
     def set_dot(self, action):
         pos = self.state
@@ -25,8 +25,7 @@ class Env(BaseEnv):
         super().__init__(dt=0.1, max_t=1)
 
         self.model = Model(x0[0])
-        self.sys = core.Sequential(**{f"sys_{i:02d}": Model(x0[i]) for i in
-                                      range(3)})
+        self.sys = core.Sequential(**{f"sys_{i:02d}": Model(x0[i]) for i in range(3)})
 
     def step(self):
         *_, done = self.update()
@@ -53,8 +52,8 @@ def main():
             break
 
     env.close()
-    print('running')
+    print("running")
+
 
 if __name__ == "__main__":
     main()
-

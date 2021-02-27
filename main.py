@@ -49,7 +49,7 @@ class Link(BaseEnv):
 
         self.q.dot = hat(omega).dot(q)
         self.omega.dot = hat(q).dot(ddx0 + D
-                                    - R0.dot(hat(self.rho)).dot(domega0))
+                                    - R0.dot(hat(self.rho)).dot(domega0)) \
                                     / self.l
 
 
@@ -75,7 +75,7 @@ def hat(v):
         [0, -v3, v2],
         [v3, 0, -v1],
         [-v2, v1, 0]
-    )]
+    ])
 
 
 class Env(BaseEnv):

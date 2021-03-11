@@ -7,11 +7,11 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 import random
-from fym.agents import PID
+import time
 import os
 from matplotlib import pyplot as plt
-import time
-import timeit
+from celluloid import Camera
+
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -68,7 +68,7 @@ class Env(BaseEnv):
         super().reset()
         if fixed_init:
             phi = np.pi / 4
-            self.payload.pos.state = np.vstack((0.0, 0.0, -1.0))
+            self.payload.pos.state = np.vstack((0.0, 0.0, -2.0))
             self.links.link00.q.state = np.vstack(
                 (np.sin(phi), 0.0, np.cos(phi))
             )
@@ -78,9 +78,9 @@ class Env(BaseEnv):
         else:
             self.payload.pos.state = np.vstack(
                 (
-                    np.random.uniform(low=-2, high=2),
+                    np.random.uniform(low=-3, high=3),
                     0.0,
-                    np.random.uniform(low=-1, high=-9),
+                    np.random.uniform(low=-1, high=-19),
                 )
             )
             phi = np.random.uniform(low=0.1, high=np.pi / 2)
@@ -106,20 +106,22 @@ class Env(BaseEnv):
         u = self.controller(action)
         *_, done = self.update(u=u)
         quad_pos = self.convert_to_pos()
+        constraint = False
         if (
             self.payload.pos.state[2] > 0
             or np.linalg.norm(quad_pos[0] - quad_pos[1]) < self.bubble
         ):
             done = True
+            constraint = True
         r = self.reward(action, reference)
 
-        #info = {"action_converted": action_converted}
-        info = {}
+        info = {"action_converted": action}
+        #info = {}
         self.logger.record(**info)
 
         x = self.observation()
 
-        return x, r, done, quad_pos, self.payload.pos.state, np.array(self.e_set)
+        return x, r, done, quad_pos, self.payload.pos.state, np.array(self.e_set), constraint
 
     def set_dot(self, t, u):
         mt = self.payload.m + self.links.link00.m + self.links.link01.m
@@ -152,8 +154,9 @@ class Env(BaseEnv):
         elif np.linalg.norm(quad_pos[0] - quad_pos[1]) < self.bubble:
             r = -np.array([250])
         else:
-            e = load_pos - np.reshape(reference, (-1, 1))
-            r = -16 * (e[0] ** 2) - (e[2] ** 2) - 0.01 * (action[2] ** 2)
+            e_x = load_pos[0] - reference[0]
+            e_z = load_pos[2] - reference[1]
+            r = -16 * (e_x ** 2) - (e_z ** 2) - 0.01 * (action[2] ** 2)
 
         return r
 
@@ -191,8 +194,6 @@ class Env(BaseEnv):
         quad_pos = []
         for system in self.links.systems:
             q = system.q.state
-            w = system.w.state
-            m = system.m
             l = system.l
             x0 = self.payload.pos.state
             x = x0 - l * q
@@ -235,15 +236,13 @@ class ActorNet(nn.Module):
             setattr(self, f"lin_quad{i}", nn.Linear(2, 16))
         """
 
-        n_quad = config["env"]["n_quad"]
         action_size = config["ddpg"]["action_size"]
         self.reference_size = len(config["simulation"]["reference"])
         self.action_pos_bound = config["ddpg"]["action_pos_bound"]
-        self.lin1 = nn.Linear(6, 128)
-        self.lin2 = nn.Linear(128 + self.reference_size, 64)
-        self.lin3 = nn.Linear(64, 32)
-        self.lin4 = nn.Linear(32, 16)
-        self.lin5 = nn.Linear(16, action_size)
+        self.lin1 = nn.Linear(6, 64)
+        self.lin2 = nn.Linear(64 + self.reference_size, 32)
+        self.lin3 = nn.Linear(32, 16)
+        self.lin4 = nn.Linear(16, action_size)
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
 
@@ -256,8 +255,7 @@ class ActorNet(nn.Module):
             torch.cat([x, r.view(-1, self.reference_size)], 1)
         ))
         x = self.relu(self.lin3(x))
-        x = self.relu(self.lin4(x))
-        x = self.tanh(self.lin5(x))
+        x = self.tanh(self.lin4(x))
         # scaling
         x = x * torch.Tensor(
             [self.action_pos_bound, self.action_pos_bound, np.pi / 4]
@@ -270,7 +268,6 @@ class CriticNet(nn.Module):
     def __init__(self):
         super(CriticNet, self).__init__()
 
-        n_quad = config["env"]["n_quad"]
         action_size = config["ddpg"]["action_size"]
         self.lin1 = nn.Linear(6, 64)
         self.lin2 = nn.Linear(64 + action_size, 32)
@@ -334,12 +331,12 @@ class DDPG:
     def sample(self):
         sample = random.sample(self.memory, self.batch_size)
         x, u, r, xn, done, reference = zip(*sample)
-        x = torch.FloatTensor(x)
-        u = torch.FloatTensor(u)
-        r = torch.FloatTensor(r)
-        xn = torch.FloatTensor(xn)
-        reference = torch.FloatTensor(reference)
-        done = torch.FloatTensor(done).view(-1, 1)
+        x = torch.tensor(x, requires_grad=True).float()
+        u = torch.tensor(u, requires_grad=True).float()
+        r = torch.tensor(r, requires_grad=True).float()
+        xn = torch.tensor(xn, requires_grad=True).float()
+        reference = torch.tensor(reference, requires_grad=True).float()
+        done = torch.tensor(done, requires_grad=True).float().view(-1, 1)
 
         return x, u, r, xn, done, reference
 
@@ -357,6 +354,9 @@ class DDPG:
         critic_loss = self.mse(Q_noise, target)
         critic_loss.backward()
         self.critic_optim.step()
+        critic_loss2 = self.mse(Q_noise, target)
+        if critic_loss2 - critic_loss > 0:
+            print("critic loss didn't decrease")
 
         Q = self.behavior_critic([x, self.behavior_actor([x, reference])])
 
@@ -364,6 +364,9 @@ class DDPG:
         actor_loss = torch.sum(-Q)
         actor_loss.backward()
         self.actor_optim.step()
+        actor_loss2 = torch.sum(-Q)
+        if actor_loss2 - actor_loss > 0:
+            print("actor loss didn't decrease")
 
         soft_update(self.target_actor, self.behavior_actor, self.tau)
         soft_update(self.target_critic, self.behavior_critic, self.tau)
@@ -415,14 +418,14 @@ def hard_update(target, behavior):
 
 config = {
     "ddpg": {
-        "gamma": 0.95,
+        "gamma": 0.999,
         "actor_lr": 0.0001,
         "critic_lr": 0.001,
         "tau": 0.001,
         "memory_size": 20000,
         "batch_size": 64,
         "action_size": 3,
-        "action_pos_bound": 1,
+        "action_pos_bound": 2,
     },
     "env": {
         "payload.m": 1.0,
@@ -438,18 +441,18 @@ config = {
     },
     "noise": {"rho": 0.15, "mu": 0, "sigma": 0.2, "dt": 0.1},
     "simulation": {
-        "n_epi": 2000,
-        "n_test": 20,
-        "n_test_epi": 10,
-        "animation": False,
-        "reference": np.array([0.0, 0.0, -5.0]),
+        "n_epi": 1000,
+        "n_test": 100,
+        "n_test_epi": 1,
+        "animation": True,
+        "reference": np.array([0.0, -5.0]),
         "fixed_init": True,
         "reach": 0.05,
     },
 }
 
 #np.set_printoptions(precision=2)
-
+np.warnings.filterwarnings('ignore', category=np.VisibleDeprecationWarning)
 
 def main():
     # environment
@@ -467,135 +470,120 @@ def main():
     n_data = 0
     score_save = []
     data_save = deque()
+    fig = plt.figure()
+    camera = Camera(fig)
 
     # reference signal
     reference = config["simulation"]["reference"]
 
-    # test variables
-    action_bound_min = [-config["ddpg"]["action_pos_bound"],
-                        -config["ddpg"]["action_pos_bound"],
-                        -np.pi/2]
-    action_bound_max = [config["ddpg"]["action_pos_bound"],
-                        config["ddpg"]["action_pos_bound"],
-                        np.pi/2]
-    #u = np.array([1, 1, np.pi/3])
-
     for n_epi in range(config["simulation"]["n_epi"]):
         x = env.reset()
         noise.reset()
-        print("episode {}...".format(n_epi))
+        print("episode {}...".format(n_epi + 1))
         where = 0
         while True:
             u = agent.action(x, reference) + noise.sample()
-            #u = np.clip(u, action_bound_min, action_bound_max)
             u_converted = env.action_convert_to_pos(u)
             reach = 0
-            show = 0
             while True:
-            #for i in range(5000):
-                xn, r, done, quad_pos, _, e_set = env.step(u_converted, reference)
-                """
-                if show % 1 == 0: 
-                    print("quad1 pos error: {}, quad2 pos error: {}".format(
-                        np.linalg.norm(u_converted[0:3]-quad_pos[0]),
-                        np.linalg.norm(u_converted[3:6]-quad_pos[1])
-                    ))
-                    u_controller = env.controller(u_converted)
-                    print("control input1: {}, control input2: {}".format(
-                        u_controller[0:3], u_controller[3:6]))
-                    print("quad1 pos: {}, quad2 pos: {}".format(
-                        quad_pos[0], quad_pos[1]))
-                    print("payload position: {}, velocity: {}".format(
-                        xn[0:2], xn[2:4]))
-                show += 1
-                """
+                xn, r, done, quad_pos, _, e_set, constraint = env.step(u_converted, reference)
                 if all(e_set < config["simulation"]["reach"]):
                     reach = 1
                 if reach == 1 or done:
                     break
-            if reach == 1:
+            if reach == 1 or constraint == True:
                 r_train = (r + 100) / 100
-                agent.memorize((x, u, r_train, xn, done, reference))
+                if done == True and constraint == True:
+                    done_float = 1.
+                else:
+                    done_float = 0.
+                agent.memorize((x, u, r_train, xn, done_float, reference))
                 x = xn
                 n_data += 1
                 where += 1
                 #print(where)
-            if done:
-                break
             if n_data > 1000:
                 print('on training..')
                 agent.train()
+            if done:
+                break
 
 
-        if (n_epi * config["simulation"]["n_test"]) % config["simulation"][
-            "n_epi"
-        ] == 0 and n_epi != 0:
+        if (n_epi + 1) % config["simulation"]["n_test"] == 0:
             for test_epi in range(config["simulation"]["n_test_epi"]):
+                print('on testing.. {} / {}'.format(
+                    test_epi + 1, config["simulation"]["n_test_epi"]))
+
                 x = env.reset(fixed_init=config["simulation"]["fixed_init"])
                 # x = env.reset()
                 while True:
                     u = agent.action(x, reference, use="behavior")
                     u_converted = env.action_convert_to_pos(u)
+                    reach = 0
                     while True:
-                        x, r, done, quad_pos, load_pos, e_set = env.step(
+                        x, r, done, quad_pos, load_pos, e_set, _ = env.step(
                             u_converted, reference
                         )
+
+                        if config["simulation"]["animation"] and test_epi == 0:
+                            plt.cla()
+                            plt.grid(True)
+                            plt.axis([-10, 10, -1, 15])
+                            plt.plot(
+                                [x[0], quad_pos[0][0]],
+                                [-x[1], -quad_pos[0][2]],
+                                "k",
+                                linewidth=0.5,
+                            )
+                            plt.plot(
+                                [x[0], quad_pos[1][0]],
+                                [-x[1], -quad_pos[1][2]],
+                                "k",
+                                linewidth=0.5,
+                            )
+                            plt.scatter(
+                                config["simulation"]["reference"][0],
+                                config["simulation"]["reference"][1],
+                                color="y"
+                            )
+                            plt.scatter(x[0], -x[1], color="r")
+                            plt.scatter(quad_pos[0][0], -quad_pos[0][2], color="b")
+                            plt.scatter(quad_pos[1][0], -quad_pos[1][2], color="b")
+                            plt.scatter(u_converted[0], u_converted[2], marker='o', color="k")
+                            plt.scatter(u_converted[3], u_converted[5], marker='o', color="k")
+                            plt.title(f"{n_epi + 1} episodes are learned")
+                            plt.pause(config["env"]["dt"])
+
+                            #camera.snap()
+
                         if all(e_set < config["simulation"]["reach"]):
+                            reach = 1
+                        if reach == 1 or done:
                             break
                     r_train = (r + 100) / 100
                     score += r_train
-                    """
-                    print("quad1 to load distance: {}, \
-                            quad2 to load distance: {}, \
-                            quad1 y position: {}, \
-                            quad2 y position: {}, \
-                            load y position: {}".format(
-                                np.linalg.norm(load_pos - quad_pos[0]),
-                                np.linalg.norm(load_pos - quad_pos[1]),
-                                quad_pos[0][1], quad_pos[1][1], load_pos[1]))
-                    """
+
                     if test_epi == 0 and config["simulation"]["animation"]:
                         if n_epi == config["simulation"]["n_epi"] - 100:
                             data_save.append((x, r, quad_pos, load_pos, u))
-                        plt.cla()
-                        plt.axis([-10, 10, -1, 15])
-                        plt.plot(
-                            config["simulation"]["reference"][0],
-                            config["simulation"]["reference"][2],
-                            "go",
-                        )
-                        plt.plot(
-                            [x[0], quad_pos[0][0]],
-                            [-x[1], -quad_pos[0][2]],
-                            "k",
-                            linewidth=0.5,
-                        )
-                        plt.plot(
-                            [x[0], quad_pos[1][0]],
-                            [-x[1], -quad_pos[1][2]],
-                            "k",
-                            linewidth=0.5,
-                        )
-                        plt.scatter(x[0], -x[1], color="r")
-                        plt.scatter(quad_pos[0][0], -quad_pos[0][2], color="b")
-                        plt.scatter(quad_pos[1][0], -quad_pos[1][2], color="b")
-                        plt.title(f"{n_epi} episodes are learned")
-                        plt.grid(True)
-                        plt.pause(config["env"]["dt"])
 
                     if done:
                         break
-                if test_epi == 0 and config["simulation"]["animation"]:
+
+                if config["simulation"]["animation"] and test_epi == 0:
                     plt.show(block=False)
-                    time.sleep(3)
-                    plt.close("all")
+                    #time.sleep(1)
+                    plt.close('all')
+                    #animation = camera.animate(interval=100, blit=True)
+                    #animation.save(f'test_after_{n_epi}.gif')
 
             avg_score = score / config["simulation"]["n_test_epi"]
+            plt.close("all")
 
             print(
                 "# of episode: {},\
                     avg score: {}".format(
-                    n_epi, avg_score
+                    n_epi+1, avg_score
                 )
             )
             score_save.append(np.hstack((n_epi, avg_score)))
@@ -649,4 +637,4 @@ def figure(score, data_save):
 
 if __name__ == "__main__":
     score, data_save = main()
-    #figure(score, data_save)
+    figure(score, data_save)

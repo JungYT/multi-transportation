@@ -15,6 +15,7 @@ from celluloid import Camera
 
 torch.manual_seed(0)
 np.random.seed(0)
+random.seed(0)
 
 g = 9.81 * np.vstack((0.0, 0.0, 1.0))
 
@@ -68,7 +69,7 @@ class Env(BaseEnv):
         super().reset()
         if fixed_init:
             phi = np.pi / 4
-            self.payload.pos.state = np.vstack((0.0, 0.0, -2.0))
+            self.payload.pos.state = config["env"]["init"]
             self.links.link00.q.state = np.vstack(
                 (np.sin(phi), 0.0, np.cos(phi))
             )
@@ -80,10 +81,10 @@ class Env(BaseEnv):
                 (
                     np.random.uniform(low=-3, high=3),
                     0.0,
-                    np.random.uniform(low=-1, high=-19),
+                    np.random.uniform(low=-1, high=2*config["simulation"]["reference"][1]),
                 )
             )
-            phi = np.random.uniform(low=0.1, high=np.pi / 2)
+            phi = np.random.uniform(low=np.pi/12, high=np.pi / 2)
 
             self.links.link00.q.state = np.vstack(
                 (np.sin(phi), 0.0, np.cos(phi))
@@ -149,15 +150,15 @@ class Env(BaseEnv):
     def reward(self, action, reference):
         load_pos = self.payload.pos.state
         quad_pos = self.convert_to_pos()
-        if load_pos[2] > 0:
-            r = -np.array([250])
-        elif np.linalg.norm(quad_pos[0] - quad_pos[1]) < self.bubble:
-            r = -np.array([250])
+        if load_pos[2] > 0 or load_pos[2] < 2.1 * config["simulation"]["reference"][1]:
+            r = -np.array([200])
         else:
             e_x = load_pos[0] - reference[0]
             e_z = load_pos[2] - reference[1]
-            r = -16 * (e_x ** 2) - (e_z ** 2) - 0.01 * (action[2] ** 2)
+            r = -4 * (e_x ** 2) - (e_z ** 2) - 0.01 * (action[2] ** 2)
 
+        #elif np.linalg.norm(quad_pos[0] - quad_pos[1]) < self.bubble:
+        #    r = -np.array([200])
         return r
 
     def controller(self, action):
@@ -258,8 +259,8 @@ class ActorNet(nn.Module):
         x = self.tanh(self.lin4(x))
         # scaling
         x = x * torch.Tensor(
-            [self.action_pos_bound, self.action_pos_bound, np.pi / 4]
-        ) + torch.Tensor([0, 0, np.pi / 4])
+            [self.action_pos_bound, self.action_pos_bound, np.pi / 8]
+        ) + torch.Tensor([0, 0, np.pi * 5 / 24])
 
         return x
 
@@ -425,19 +426,20 @@ config = {
         "memory_size": 20000,
         "batch_size": 64,
         "action_size": 3,
-        "action_pos_bound": 2,
+        "action_pos_bound": 1,
     },
     "env": {
         "payload.m": 1.0,
         "quad.m": 1.0,
         "quad.l": 1.0,
-        "max_t": 10,
+        "max_t": 20,
         "dt": 0.01,
         "n_quad": 2,
         "K": 5,
         "epsilon": 0.1,
-        "input_saturation": 50,
-        "bubble": 0.2,
+        "input_saturation": 100,
+        "bubble": 0.5,
+        "init": np.vstack((0.0, 0.0, -1.0)),
     },
     "noise": {"rho": 0.15, "mu": 0, "sigma": 0.2, "dt": 0.1},
     "simulation": {
@@ -447,7 +449,7 @@ config = {
         "animation": True,
         "reference": np.array([0.0, -5.0]),
         "fixed_init": True,
-        "reach": 0.05,
+        "reach": 0.1,
     },
 }
 
@@ -470,8 +472,6 @@ def main():
     n_data = 0
     score_save = []
     data_save = deque()
-    fig = plt.figure()
-    camera = Camera(fig)
 
     # reference signal
     reference = config["simulation"]["reference"]
@@ -480,7 +480,6 @@ def main():
         x = env.reset()
         noise.reset()
         print("episode {}...".format(n_epi + 1))
-        where = 0
         while True:
             u = agent.action(x, reference) + noise.sample()
             u_converted = env.action_convert_to_pos(u)
@@ -500,17 +499,20 @@ def main():
                 agent.memorize((x, u, r_train, xn, done_float, reference))
                 x = xn
                 n_data += 1
-                where += 1
-                #print(where)
             if n_data > 1000:
-                print('on training..')
+                #print('on training..')
                 agent.train()
             if done:
                 break
 
-
         if (n_epi + 1) % config["simulation"]["n_test"] == 0:
             for test_epi in range(config["simulation"]["n_test_epi"]):
+                fig = plt.figure()
+                camera = Camera(fig)
+
+                score_his = []
+                return_set = []
+                score = 0
                 print('on testing.. {} / {}'.format(
                     test_epi + 1, config["simulation"]["n_test_epi"]))
 
@@ -521,14 +523,14 @@ def main():
                     u_converted = env.action_convert_to_pos(u)
                     reach = 0
                     while True:
-                        x, r, done, quad_pos, load_pos, e_set, _ = env.step(
+                        x, r, done, quad_pos, load_pos, e_set, constraint = env.step(
                             u_converted, reference
                         )
 
                         if config["simulation"]["animation"] and test_epi == 0:
-                            plt.cla()
+                            #plt.cla()
                             plt.grid(True)
-                            plt.axis([-10, 10, -1, 15])
+                            plt.axis([-10, 10, -3, 10])
                             plt.plot(
                                 [x[0], quad_pos[0][0]],
                                 [-x[1], -quad_pos[0][2]],
@@ -543,25 +545,28 @@ def main():
                             )
                             plt.scatter(
                                 config["simulation"]["reference"][0],
-                                config["simulation"]["reference"][1],
-                                color="y"
+                                -config["simulation"]["reference"][1],
+                                facecolors='y',
+                                edgecolors='y'
                             )
-                            plt.scatter(x[0], -x[1], color="r")
-                            plt.scatter(quad_pos[0][0], -quad_pos[0][2], color="b")
-                            plt.scatter(quad_pos[1][0], -quad_pos[1][2], color="b")
-                            plt.scatter(u_converted[0], u_converted[2], marker='o', color="k")
-                            plt.scatter(u_converted[3], u_converted[5], marker='o', color="k")
+                            plt.scatter(x[0], -x[1], facecolors='none', edgecolors="r")
+                            plt.scatter(quad_pos[0][0], -quad_pos[0][2], facecolors='none', edgecolors="b")
+                            plt.scatter(quad_pos[1][0], -quad_pos[1][2], facecolors='none', edgecolors="b")
+                            plt.scatter(u_converted[0], -u_converted[2], facecolors='none', edgecolors="k")
+                            plt.scatter(u_converted[3], -u_converted[5], facecolors='none', edgecolors="k")
                             plt.title(f"{n_epi + 1} episodes are learned")
-                            plt.pause(config["env"]["dt"])
+                            #plt.pause(config["env"]["dt"])
 
-                            #camera.snap()
+                            camera.snap()
 
                         if all(e_set < config["simulation"]["reach"]):
                             reach = 1
                         if reach == 1 or done:
                             break
-                    r_train = (r + 100) / 100
-                    score += r_train
+
+                    if reach == 1 or constraint == True:
+                        r_train = (r + 100) / 100
+                        score_his.append(r_train)
 
                     if test_epi == 0 and config["simulation"]["animation"]:
                         if n_epi == config["simulation"]["n_epi"] - 100:
@@ -571,13 +576,19 @@ def main():
                         break
 
                 if config["simulation"]["animation"] and test_epi == 0:
-                    plt.show(block=False)
+                    #plt.show(block=False)
                     #time.sleep(1)
-                    plt.close('all')
-                    #animation = camera.animate(interval=100, blit=True)
-                    #animation.save(f'test_after_{n_epi}.gif')
+                    #plt.close('all')
+                    animation = camera.animate(interval=10, blit=True)
+                    animation.save(f'test_after_learning_{n_epi+1}_episode.gif')
+                    print('save gif')
 
-            avg_score = score / config["simulation"]["n_test_epi"]
+                for reward in score_his[::-1]:
+                    score = reward + config["ddpg"]["gamma"] * score
+
+                return_set.append(score)
+
+            avg_score = sum(return_set) / len(return_set)
             plt.close("all")
 
             print(
@@ -587,7 +598,6 @@ def main():
                 )
             )
             score_save.append(np.hstack((n_epi, avg_score)))
-            score = 0
 
     env.close()
     return np.vstack(score_save), data_save
@@ -624,12 +634,12 @@ def figure(score, data_save):
         pos[:, 2],
         "r--",
         time,
-        config["simulation"]["reference"][2] * np.ones(len(time)),
+        config["simulation"]["reference"][1] * np.ones(len(time)),
         "b",
     )
     ax2[0].set_title("Position of payload")
     fig3, ax3 = plt.subplots(nrows=1, ncols=1)
-    ax3.plot(score[:, 0], score[:, 1])
+    ax3.bar(score[:, 0], score[:, 1])
     ax3.set_title("Return")
     ax3.set_xlabel("episode number")
     plt.show()

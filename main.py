@@ -41,10 +41,10 @@ time_step = 0.01
 time_max = 10
 reference = np.array([0.0, -5.0])
 eval_interval = 1000
-animation = False
+animation = True
 
-epi_num = 2
-eval_interval = 1
+epi_num = 12000
+eval_interval = 300
 dis_factor = 0.999
 actor_learning_rate = 0.0001
 critic_learning_rate = 0.001
@@ -657,5 +657,10 @@ if __name__ == "__main__":
         bbox_inches='tight'
     )
     plt.close('all')
+    end_logger = logging.Logger(
+        log_dir=eval_path,
+        file_name="return_his.h5")
+    end_logger.record(return_his=return_his)
+    end_logger.close()
 
 

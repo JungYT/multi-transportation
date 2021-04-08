@@ -36,31 +36,46 @@ random.seed(0)
 torch.cuda.manual_seed(0)
 torch.cuda.manual_seed_all(0)
 
-g = 9.81 * np.vstack((0.0, 0.0, 1.0))
+"""
+Global variables which are not related during parallel simulation
+
+    animation: whether make & save gif file or not
+    epi_num: total amount of episode used to learn
+    eval_interval: how many episodes are trained before evaluating policy
+    time_step: time step of simulation
+    time_max: desired time which simulation is terminated in
+    g: gravity vector
+
+    load_mass: mass of payload
+    load_pos_init: initial position of load when evaluating policy
+    load_posx_rand: boundary of payload's initial position x-component
+    load_posz_rand: boundary of payload's initial position z-component
+
+    quad_num: amount of quadrotors
+    quad_mass: mass of each quadrotors
+    input_saturation: magnitude limit of quadrotor's input
+    controller_chatter_bound: epsilon in sliding mode controller for suppressing chattering
+    controller_K: control gain of SMC
+    quad_reach_criteria: criteria whether quadrotor reaches to desired position or not
+    action_scaled: proportional constant for scaling action,
+                    a in y = a*x + b
+    action_scaled_bias: bias constant for scaling action,
+                    b in y = a*x + b
+
+    link_len: length of link
+    link_ang_rand: boundary of initial half of angle between two quadrotors
+
+    reference: desired load position
+    action_size: size of action vector
+    state_size: size of state vector
+    ref_size: size of reference vector
+"""
+animation = True
+epi_num = 2
+eval_interval = 1
 time_step = 0.01
 time_max = 10
-reference = np.array([0.0, -5.0])
-eval_interval = 1000
-animation = True
-
-epi_num = 12000
-eval_interval = 300
-dis_factor = 0.999
-actor_learning_rate = 0.0001
-critic_learning_rate = 0.001
-softupdate_const = 0.001
-memory_size = 20000
-batch_size = 64
-action_size = 3
-state_size = 6
-ref_size = 2
-action_scaled = [1, 1, np.pi / 8]
-action_scaled_bias = [0, 0, np.pi * 5 / 24]
-reward_weight = np.array((
-    [4, 0, 0],
-    [0, 1, 0],
-    [0, 0, 0.01]
-))
+g = 9.81 * np.vstack((0.0, 0.0, 1.0))
 
 load_mass= 1.0
 load_pos_init = np.vstack((0.0, 0.0, -1.0))
@@ -73,9 +88,44 @@ input_saturation = 100
 controller_chatter_bound = 0.1
 controller_K = 5
 quad_reach_criteria = 0.05
+action_scaled = [1, 1, np.pi / 8]
+action_scaled_bias = [0, 0, np.pi * 5 / 24]
 
 link_len = 1.0
 link_ang_rand = [np.pi / 12, np.pi / 2]
+
+reference = np.array([0.0, -5.0])
+action_size = 3
+state_size = 6
+ref_size = 2
+
+"""
+Variables which are design parameters
+
+    dis_factor: discount factor of DDPG (gamma)
+    actor_learning_rate: learning rate of actor
+    critic_learning_rate: learning rate of critic
+    softupdate_const: time constant of soft update (tau)
+    memory_size: maximum amount of item(data) saved for learning
+    batch_size: size of batch update
+    reward_weight: weight of reward,
+                    load's x-position error,
+                    load's z-position error,
+                    half of angle between two quadrotos
+                    in order
+"""
+dis_factor = 0.999
+actor_learning_rate = 0.0001
+critic_learning_rate = 0.001
+softupdate_const = 0.001
+memory_size = 20000
+batch_size = 64
+reward_weight = np.array((
+    [4, 0, 0],
+    [0, 1, 0],
+    [0, 0, 0.01]
+))
+
 
 class OrnsteinUhlenbeckNoise:
     def __init__(self, x0=None):
@@ -168,7 +218,7 @@ class PointMassLoadPointMassQuad2D(BaseEnv):
     A point mass load, point mass quadrotors, and 2-D environment.
     Sliding Mode Controller with feedback linearization is used as position controller.
     """
-    def __init__(self):
+    def __init__(self, reward_weight):
         """
         To terminate when quadrotors reach to desired position after desired terminate time,
         maximum time of simulation, "max_t", is set as 10 times of desired terminate time, "time_max".
@@ -178,6 +228,7 @@ class PointMassLoadPointMassQuad2D(BaseEnv):
         self.links = core.Sequential(
             **{f"link{i:02d}": Link() for i in range(quad_num)}
         )
+        self.reward_weight = reward_weight
 
     def reset(self, fixed_init=False):
         """
@@ -274,7 +325,7 @@ class PointMassLoadPointMassQuad2D(BaseEnv):
         else:
             e = load_pos - reference
             x = np.append(e, action[2])
-            r = -np.transpose(x).dot(reward_weight.dot(x))
+            r = -np.transpose(x).dot(self.reward_weight.dot(x))
         return np.array([r])
 
     def control_quad_pos(self, quad_des_pos):
@@ -392,7 +443,8 @@ class CriticNet(nn.Module):
         return x4
 
 class DDPG:
-    def __init__(self):
+    def __init__(self, dis_factor, actor_learning_rate, critic_learning_rate,
+                 softupdate_const, memory_size, batch_size):
         self.memory = deque(maxlen=memory_size)
         self.behavior_actor = ActorNet().float()
         self.behavior_critic = CriticNet().float()
@@ -407,6 +459,9 @@ class DDPG:
         self.mse = nn.MSELoss()
         hardupdate(self.target_actor, self.behavior_actor)
         hardupdate(self.target_critic, self.behavior_critic)
+        self.dis_factor = dis_factor
+        self.softupdate_const = softupdate_const
+        self.batch_size = batch_size
 
     def get_action(self, state, reference, net="behavior"):
         with torch.no_grad():
@@ -424,7 +479,7 @@ class DDPG:
         self.memory.append(item)
 
     def get_sample(self):
-        sample = random.sample(self.memory, batch_size)
+        sample = random.sample(self.memory, self.batch_size)
         state, action, reward, state_next, epi_done, reference = zip(*sample)
         x = torch.tensor(state, requires_grad=True).float()
         u = torch.tensor(action, requires_grad=True).float()
@@ -440,7 +495,7 @@ class DDPG:
         with torch.no_grad():
             action = self.target_actor([xn, ref])
             Qn = self.target_critic([xn, action])
-            target = r + (1-done) * dis_factor * Qn
+            target = r + (1-done) * self.dis_factor * Qn
         Q_w_noise_action = self.behavior_critic([x, u])
         self.critic_optim.zero_grad()
         critic_loss = self.mse(Q_w_noise_action, target)
@@ -453,13 +508,27 @@ class DDPG:
         actor_loss.backward()
         self.actor_optim.step()
 
-        softupdate(self.target_actor, self.behavior_actor, softupdate_const)
-        softupdate(self.target_critic, self.behavior_critic, softupdate_const)
+        softupdate(self.target_actor, self.behavior_actor, self.softupdate_const)
+        softupdate(self.target_critic, self.behavior_critic, self.softupdate_const)
 
-def main():
-    env = PointMassLoadPointMassQuad2D()
-    agent = DDPG()
+def main(dis_factor, actor_learning_rate, critic_learning_rate, softupdate_const,
+         memory_size, batch_size, reward_weight):
+    env = PointMassLoadPointMassQuad2D(reward_weight)
+    agent = DDPG(dis_factor, actor_learning_rate, critic_learning_rate,
+                 softupdate_const, memory_size, batch_size)
     noise = OrnsteinUhlenbeckNoise()
+    parameter_logger = logging.Logger()
+    parameters = {
+        'dis_factor': dis_factor,
+        'actor_learning_rate': actor_learning_rate,
+        'critic_learning_rate': critic_learning_rate,
+        'softupdate_const': softupdate_const,
+        'memory_size': memory_size,
+        'batch_size': batch_size,
+        'reward_weight': reward_weight,
+    }
+    parameter_logger.record(**parameters)
+    parameter_logger.close()
 
     for epi in tqdm(range(epi_num)):
         x = env.reset()
@@ -511,7 +580,7 @@ def main():
                 if done:
                     break
             if animation:
-                ani = camera.animate(interval=5, blit=True)
+                ani = camera.animate(interval=10, blit=True)
                 eval_gif = os.path.join(eval_path, f"{epi+1}_ani.gif")
                 ani.save(eval_gif)
             eval_logger.close()
@@ -638,7 +707,8 @@ if __name__ == "__main__":
     stats.strip_dirs().sort_stats(SortKey.TIME).print_stats(20)
     """
 
-    main()
+    main(dis_factor, actor_learning_rate, critic_learning_rate, softupdate_const,
+         memory_size, batch_size, reward_weight)
     plt.close('all')
 
     return_his = np.array(

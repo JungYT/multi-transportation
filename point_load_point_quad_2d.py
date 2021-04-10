@@ -79,7 +79,7 @@ g = 9.81 * np.vstack((0.0, 0.0, 1.0))
 
 load_mass= 1.0
 load_pos_init = np.vstack((0.0, 0.0, -1.0))
-load_posx_rand = [-3, 3]
+load_posxy_rand = [-3, 3]
 load_posz_rand = [-1, -5]
 
 quad_num = 2

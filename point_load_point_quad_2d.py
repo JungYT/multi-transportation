@@ -243,7 +243,7 @@ class PointMassLoadPointMassQuad2D(BaseEnv):
             self.links.link01.link.state = np.vstack((-np.sin(phi), 0.0, np.cos(phi)))
         else:
             self.load.pos.state = np.vstack(
-                (np.random.uniform(low=load_posx_rand[0], high=load_posx_rand[1]),
+                (np.random.uniform(low=load_posxy_rand[0], high=load_posxy_rand[1]),
                  0.0,
                  np.random.uniform(low=load_posz_rand[0], high=load_posz_rand[1]))
             )

@@ -287,7 +287,7 @@ class PointMassLoadPointMassQuad2D(BaseEnv):
         """
         time = self.clock.get()
         load_posz = self.load.pos.state[2]
-        done = 1. if distance < quad_reach_criteria and (time > time_max or load_posz) > 0 else 0.
+        done = 1. if distance < quad_reach_criteria and (time > time_max or load_posz > 0) else 0.
         return done, time
 
     def set_dot(self, t, u):

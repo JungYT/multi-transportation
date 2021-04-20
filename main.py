@@ -131,7 +131,7 @@ class IntergratedDynamics(BaseEnv):
             m_T += m
             rho_hat = hat(rho)
             q_qT = q.dot(q.T)
-            m_l_w_q = m * l * np.dot(w,w) * q
+            m_l_w_q = m * l * np.linalg.norm(w)*np.linalg.norm(w) * q
             R0_Omega2_rho = R0.dot(Omega_hat2.dot(rho))
             R0_rhohat = R0.dot(rho_hat)
             rhohat_R0T = rho_hat.dot(R0.T)
@@ -163,11 +163,11 @@ class IntergratedDynamics(BaseEnv):
         Mq = m_T*np.eye(3) + S4
         J_hat = self.load.J - S3
         J_hat_inv = np.linalg.inv(J_hat)
-        A = J_hat_inv.dot(S5)
+        A = -J_hat_inv.dot(S5)
         B = J_hat_inv.dot(S6)
-        C = Mq - A.dot(S2)
+        C = Mq - S2.dot(A)
 
-        load_acc = np.linalg.inv(C).dot(Mq.dot(self.g*self.e3) + S1 + B.dot(S2))
+        load_acc = np.linalg.inv(C).dot(Mq.dot(self.g*self.e3) + S1 + S2.dot(B))
         load_ang_acc = A.dot(load_acc) + B
         self.load.set_dot(load_acc, load_ang_acc)
 
@@ -181,12 +181,13 @@ class IntergratedDynamics(BaseEnv):
             R = quad.rotation_mat.state
             u = -f[i] * R.dot(self.e3)
             D = R0.dot(Omega_hat2.dot(rho)) - self.g*self.e3 - u/m
-            Omega_dot = A.dot(load_acc) + B
+            dOmega = A.dot(load_acc) + B
 
             link_ang_acc = (hat(q)).dot(
-                load_acc + D - R0.dot(hat(rho).dot(Omega_dot))) / l
+                load_acc + D - R0.dot(hat(rho).dot(dOmega))) / l
             link.set_dot(link_ang_acc)
             quad.set_dot(M[i])
+        print('debug')
 
     def step(self):
         f_set = 3*[5]

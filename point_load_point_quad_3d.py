@@ -550,7 +550,7 @@ def get2goal_w_RL():
                     xn, r, done, info = env.step(u, quad_des_pos, goal)
                     eval_logger.record(**info)
                     if animation:
-                        snap_GIF(
+                        snap_ani(
                             ax,
                             info['load_pos'],
                             info['quad_pos'],
@@ -590,7 +590,7 @@ def get2goal_wo_RL():
             xn, r, done, info = env.step(u, quad_des_pos, goal)
             logger.record(**info)
             if animation:
-                snap_GIF(ax,
+                snap_ani(ax,
                         info['load_pos'],
                         info['quad_pos'],
                         info['quad_des_pos'],
@@ -728,7 +728,7 @@ def make_figure(path, epi_num_trained, save_fig=True):
             G = r.item() + dis_factor * G
         return -G
 
-def snap_GIF(ax, load_pos, quad_pos, quad_des_pos, center_pos):
+def snap_ani(ax, load_pos, quad_pos, quad_des_pos, center_pos):
     ax.plot3D(
         [load_pos[0][0], quad_pos[0][0][0]],
         [load_pos[1][0], quad_pos[0][1][0]],

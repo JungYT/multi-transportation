@@ -73,7 +73,7 @@ class Quadrotor(BaseEnv):
 
     def set_dot(self, M):
         R = self.rotation_mat.state
-        self.rotation_mat = R.dot(hat(self.ang_rate.state))
+        self.rotation_mat.dot = R.dot(hat(self.ang_rate.state))
         Omega = self.ang_rate.state
         self.ang_rate.dot = np.linalg.inv(self.J).dot(
             M - (hat(Omega)).dot(self.J.dot(Omega))
@@ -187,7 +187,6 @@ class IntergratedDynamics(BaseEnv):
                 load_acc + D - R0.dot(hat(rho).dot(dOmega))) / l
             link.set_dot(link_ang_acc)
             quad.set_dot(M[i])
-        print('debug')
 
     def step(self):
         f_set = 3*[5]

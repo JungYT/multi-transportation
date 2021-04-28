@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from collections import deque
+from matplotlib import pyplot as plt
 
 from fym.core import BaseEnv, BaseSystem
 import fym.core as core
@@ -72,6 +73,13 @@ def main():
     done, info = env.step()
     print('debug')
 
+def test():
+    fig = plt.figure()
+    ax = fig.gca(projection='3d')
+    ax.plot3D(1, 2, 3, marker="X")
+    plt.show()
+
+
 
 if __name__ == "__main__":
-    main()
+    test()

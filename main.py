@@ -60,7 +60,9 @@ class Link(BaseEnv):
         self.rho = rho
 
     def set_dot(self, ang_acc):
-        self.link.dot = (hat(self.ang_rate.state)).dot(self.link.state)
+        w = self.ang_rate.state
+        q = self.link.state
+        self.link.dot = (hat(w)).dot(q)
         self.ang_rate.dot = ang_acc
 
 class Quadrotor(BaseEnv):
@@ -73,15 +75,15 @@ class Quadrotor(BaseEnv):
 
     def set_dot(self, M):
         R = self.rot_mat.state
-        self.rot_mat.dot = R.dot(hat(self.ang_rate.state))
         Omega = self.ang_rate.state
+        self.rot_mat.dot = R.dot(hat(Omega))
         self.ang_rate.dot = np.linalg.inv(self.J).dot(
             M - (hat(Omega)).dot(self.J.dot(Omega))
         )
 
 class IntergratedDynamics(BaseEnv):
     def __init__(self, env_params):
-        super().__init__(dt=env_params['time_step'], max_t=env_params['max_t'])
+        super().__init__(dt=env_params['time_step'], max_t=env_params['max_t'], solver="odeint")
         self.quad_num = env_params['quad_num']
         self.load = Load(
             env_params['load_mass'],
@@ -136,15 +138,15 @@ class IntergratedDynamics(BaseEnv):
             u = -f_des[i] * R.dot(self.e3)
 
             m_T += m
-            q_hat2 = hat(q).dot(hat(q))
+            q_hat2 = (hat(q)).dot(hat(q))
             q_qT = np.eye(3) + q_hat2
             rho_hat = hat(rho)
             rhohat_R0T = rho_hat.dot(R0.T)
             w_norm = np.linalg.norm(w)
-            l_wnorm_q = l * w_norm * w_norm * q
+            l_wnorm2_q = l * w_norm * w_norm * q
             R0_Omega2_rho = R0.dot(Omega_hat2.dot(rho))
 
-            S1_temp = q_qT.dot(u - m*R0_Omega2_rho) - m*l_wnorm_q
+            S1_temp = q_qT.dot(u - m*R0_Omega2_rho) - m*l_wnorm2_q
             S2_temp = m * q_qT.dot(rhohat_R0T.T)
             S3_temp = m * rhohat_R0T.dot(q_qT.dot(rhohat_R0T.T))
             S4_temp = m * q_hat2
@@ -152,7 +154,7 @@ class IntergratedDynamics(BaseEnv):
             S6_temp = rhohat_R0T.dot(
                 q_qT.dot(u + m*self.g*self.e3) \
                 - m*q_hat2.dot(R0_Omega2_rho) \
-                - m*l_wnorm_q
+                - m*l_wnorm2_q
             )
             S7_temp = m*rho_hat.dot(rho_hat)
             self.S1_set.append(S1_temp)
@@ -176,7 +178,6 @@ class IntergratedDynamics(BaseEnv):
             print('J_hat seems to be singular')
         J_hat_inv = np.linalg.inv(J_hat)
         Mq = m_T*np.eye(3) + S4
-
         A = -J_hat_inv.dot(S5)
         B = J_hat_inv.dot(S6 - Omega_hat.dot(J_bar.dot(Omega)))
         C = Mq + S2.dot(A)
@@ -186,7 +187,6 @@ class IntergratedDynamics(BaseEnv):
         load_acc = np.linalg.inv(C).dot(Mq.dot(self.g*self.e3) + S1 - S2.dot(B))
         load_ang_acc = A.dot(load_acc) + B
         self.load.set_dot(load_acc, load_ang_acc)
-
         for i, (link, quad) in enumerate(
                 zip(self.links.systems, self.quads.systems)
         ):
@@ -213,10 +213,13 @@ class IntergratedDynamics(BaseEnv):
             self.M.append(np.vstack((1.0, 0.0, 0.0)))
         """
         *_, done = self.update(f_des=f_des_set)
-        quad_pos, quad_vel, quad_ang, quad_ang_rate, quad_rot_mat \
+        quad_pos, quad_vel, quad_ang, quad_ang_rate, quad_rot_mat, anchor_pos \
             = self.compute_quad_state()
         load_ang = np.vstack(rot.dcm2angle(self.load.rot_mat.state.T))[::-1]
         done, time = self.terminate()
+        distance = [np.linalg.norm(quad_pos[i]-anchor_pos[i])
+                    for i in range(self.quad_num)]
+
         info = {
             "time": time,
             "load_pos": self.load.pos.state,
@@ -230,6 +233,8 @@ class IntergratedDynamics(BaseEnv):
             "quad_ang_rate": quad_ang_rate,
             "quad_rot_mat": quad_rot_mat,
             "moment": self.M,
+            "distance": distance,
+            "anchor_pos": anchor_pos,
         }
         return done, info
 
@@ -257,7 +262,9 @@ class IntergratedDynamics(BaseEnv):
         quad_rot_mat = [
             quad.rot_mat.state for quad in self.quads.systems
         ]
-        return quad_pos, quad_vel, quad_ang, quad_ang_rate, quad_rot_mat
+        anchor_pos = [load_pos + load_rot_mat.dot(link.rho) for link in self.links.systems]
+
+        return quad_pos, quad_vel, quad_ang, quad_ang_rate, quad_rot_mat, anchor_pos
 
     def controller(self, des_attitude_set):
         for i, quad in enumerate(self.quads.systems):
@@ -305,7 +312,9 @@ def main(path_base, env_params):
         if done:
             break
     if env_params['animation']:
-        ani = camera.animate(interval=10, blit=True)
+        ani = camera.animate(
+            interval=1000*env_params['time_step'], blit=True
+        )
         path_ani = os.path.join(path_base, "ani.mp4")
         ani.save(path_ani)
     plt.close('all')
@@ -327,6 +336,7 @@ def make_figure(path, params):
     quad_ang = data['quad_ang']*180/np.pi
     quad_ang_rate = data['quad_ang_rate']*180/np.pi
     moment = data['moment']
+    distance = data['distance']
 
     pos_ylabel = ["X [m]", "Y [m]", "Height [m]"]
     make_figure_3col(
@@ -425,69 +435,30 @@ def make_figure(path, params):
         f"quad_moment_{i}",
         path
     ) for i in range(quad_num)]
-    """
-    for i in range(quad_num):
-        fig, ax = plt.subplot(nrows=3, ncols=1)
-        ax[0].plot(time, quad_pos[i][:,0])
-        ax[1].plot(time, quad_pos[i][:,1])
-        ax[2].plot(time, -quad_pos[i][:,2])
-        ax[0].set_title(f"Position of quadrotor {i}")
-        ax[0].set_ylabel("x [m]")
-        ax[1].set_ylabel("y [m]")
-        ax[2].set_ylabel("z [m]")
-        ax[2].set_xlabel("time [s]")
-        [ax[i].grid(True) for i in range(3)]
-        fig.savefig(
-            os.path.join(path, f"quad_pos_{i}"),
-            bbox_inches='tight'
-        )
-        fig1, ax1 = plt.subplot(nrows=3, ncols=1)
-        ax1[0].plot(time, quad_vel[i][:,0])
-        ax1[1].plot(time, quad_vel[i][:,1])
-        ax1[2].plot(time, quad_vel[i][:,2])
-        ax1[0].set_title(f"Velocity of quadrotor {i}")
-        ax1[0].set_ylabel("vx [m/s]")
-        ax1[1].set_ylabel("vy [m/s]")
-        ax1[2].set_ylabel("vz [m/s]")
-        ax1[2].set_xlabel("time [s]")
-        [ax1[i].grid(True) for i in range(3)]
-        fig1.savefig(
-            os.path.join(path, f"quad_vel_{i}"),
-            bbox_inches='tight'
-        )
-        fig2, ax2 = plt.subplots(nrows=3, ncols=1)
-        ax2[0].plot(time, quad_ang[i][:,0]*np.pi/180)
-        ax2[1].plot(time, quad_ang[i][:,1]*np.pi/180)
-        ax2[2].plot(time, quad_ang[i][:,2]*np.pi/180)
-        ax2[0].set_title(f"Euler angle of quadrotor {i}")
-        ax2[0].set_ylabel("Yaw [deg]")
-        ax2[1].set_ylabel("Pitch [deg]")
-        ax2[2].set_ylabel("Roll [deg]")
-        ax2[2].set_xlabel("time [s]")
-        [ax2[i].grid(True) for i in range(3)]
-        fig2.savefig(
-            os.path.join(path, f"quad_ang_{i}"),
-            bbox_inches='tight'
-        )
-        fig3, ax3 = plt.subplots(nrows=3, ncols=1)
-        ax3[0].plot(time, quad_ang_rate[i][:,0]*np.pi/180)
-        ax3[1].plot(time, quad_ang_rate[i][:,1]*np.pi/180)
-        ax3[2].plot(time, quad_ang_rate[i][:,2]*np.pi/180)
-        ax3[0].set_title(f"Euler angle rate of quadrotor {i}")
-        ax3[0].set_ylabel("Yaw rate [deg/s]")
-        ax3[1].set_ylabel("Pitch rate [deg/s]")
-        ax3[2].set_ylabel("Roll rate [deg/s]")
-        ax3[2].set_xlabel("time [s]")
-        [ax3[i].grid(True) for i in range(3)]
-        fig3.savefig(
-            os.path.join(path, f"quad_ang_rate_{i}"),
-            bbox_inches='tight'
-        )
-    """
+
+    distance_ylabel = ["quad0 [m]", "quad1 [m]", "quad2 [m]"]
+    link_len = info['link_len'][0]
+    fig, ax = plt.subplots(nrows=3, ncols=1)
+    ax[0].plot(time, distance[:,0])
+    ax[1].plot(time, distance[:,1])
+    ax[2].plot(time, distance[:,2])
+    ax[0].set_title("distance from quad to load")
+    ax[0].set_ylabel(distance_ylabel[0])
+    ax[1].set_ylabel(distance_ylabel[1])
+    ax[2].set_ylabel(distance_ylabel[2])
+    ax[2].set_xlabel("time")
+    [ax[i].grid(True) for i in range(3)]
+    [ax[i].set_ylim(link_len[i]-0.5, link_len[i]+0.5) for i in range(3)]
+    fig.align_ylabels(ax)
+    fig.savefig(
+        os.path.join(path, "distance"),
+        bbox_inches='tight'
+    )
 
     plt.close('all')
 
-def make_figure_3col(x, y, title, xlabel, ylabel, file_name, path, unwrap=False):
+def make_figure_3col(x, y, title, xlabel, ylabel,
+                     file_name, path, unwrap=False):
     fig, ax = plt.subplots(nrows=3, ncols=1)
     if unwrap:
         ax[0].plot(x, np.unwrap(y[:,0], axis=0))
@@ -513,11 +484,9 @@ def make_figure_3col(x, y, title, xlabel, ylabel, file_name, path, unwrap=False)
 def snap_ani(ax, info, params):
     load_pos = info['load_pos']
     quad_pos = info['quad_pos']
-    load_rot_mat = info['load_rot_mat']
-    rho = params['link_rho']
     quad_num = params['quad_num']
 
-    anchor_pos = [load_pos + load_rot_mat.dot(rho[i]) for i in range(quad_num)]
+    anchor_pos = info["anchor_pos"]
     # link
     [
         ax.plot3D(
@@ -571,7 +540,9 @@ if __name__ == "__main__":
     In simulation, rotation matrix follows robotic convention,
     which means transformation matrix from body to ref.
     """
-    quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x ord
+    # quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x ord
+    quad_rot_mat_init = rot.angle2dcm(np.pi/3, np.pi/4, np.pi/6).T # z-y-x ord
+    # quad_rot_mat_init = rot.angle2dcm(0, 0, np.pi/6).T # z-y-x ord
     anchor_radius = 1
     cg_bias = np.vstack((0.0, 0.0, 1))
     env_params = {

@@ -154,8 +154,8 @@ class IntergratedDynamics(BaseEnv):
         super().reset()
         if random_init:
             self.load.pos.state[2] = np.random.uniform(
-                low=-1,
-                high=-5
+                low=-5.,
+                high=-10.
             ),
             self.load.ang_rate.dot = np.vstack((
                 np.random.uniform(
@@ -410,7 +410,7 @@ class IntergratedDynamics(BaseEnv):
         load_velz = self.load.vel.state[2]
         if (load_posz > 0 or
                 any(x < self.collision_criteria for x in collisions)):
-            r = np.array([-100])
+            r = np.array([-500])
         else:
             r = -(np.linalg.norm(load_ang) +
                   np.linalg.norm(self.load.ang_rate.state) +
@@ -530,6 +530,7 @@ def main(path_base, env_params):
     env = IntergratedDynamics(env_params)
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
+    cost_his = []
     for epi in tqdm(range(env_params["epi_num"])):
         x = env.reset()
         noise.reset()
@@ -552,36 +553,146 @@ def main(path_base, env_params):
 
         if (epi+1) % env_params["epi_show"] == 0:
             if env_params['animation']:
-                fig = plt.figure()
+                fig = plt.figure()# {{{
                 ax = fig.gca(projection='3d')
-                camera =Camera(fig)
+                camera =Camera(fig)# }}}
             eval_logger = logging.Logger(
                 log_dir=os.path.join(path_base, 'eval'),
                 file_name=f"data_trained_{(epi+1):05d}.h5"
             )
-            x = env.reset()
+            x = env.reset(random_init=False)
             while True:
                 u = agent.get_action(x)
                 xn, r, done, info = env.step(u)
                 eval_logger.record(**info)
                 x = xn
                 if env_params['animation']:
-                    snap_ani(ax, info, env_params)
-                    camera.snap()
+                    snap_ani(ax, info, env_params)# {{{
+                    camera.snap()# }}}
                 if done:
                     break
             if env_params['animation']:
-                ani = camera.animate(
+                ani = camera.animate(# {{{
                     interval=1000*env_params['time_step'], blit=True
                 )
                 path_ani = os.path.join(path_base, f"ani_{(epi+1):05d}.mp4")
-                ani.save(path_ani)
+                ani.save(path_ani)# }}}
             eval_logger.close()
             plt.close('all')
+            cost = make_figure(
+                os.path.join(path_base, 'eval'),
+                (epi+1),
+                env_params
+            )
+            cost_his.append([epi+1, cost])
+            torch.save({
+                'target_actor': agent.target_actor.state_dict(),
+                'target_critic': agent.target_critic.state_dict()
+            }, os.path.join(path_base, 'eval', f"parameters_{epi+1:05d}.pt"))
+    cost_his = np.array(cost_his)
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(cost_his[:,0], cost_his[:,1], "*")
+    ax.grid(True)
+    ax.set_title(f"Cost according to number of trained episode")
+    ax.set_xlabel("Number of trained episode")
+    ax.set_ylabel("Cost")
+    fig.savefig(
+        os.path.join(path_base, f"Cost_{env_params['epi_num']:d}"),
+        bbox_inches='tight'
+    )
+    plt.close('all')
     env.close()
+    logger = logging.Logger(
+        log_dir=path_base, file_name='params_and_cost.h5'
+    )
+    logger.set_info(**env_params)
+    logger.record(cost_his=cost_his)
+    logger.close()
 
+def main(path_base, env_params):
+    env = IntergratedDynamics(env_params)
+    agent = DDPG()
+    noise = OrnsteinUhlenbeckNoise()
+    cost_his = []
+    for epi in tqdm(range(env_params["epi_num"])):
+        x = env.reset()
+        noise.reset()
+        train_logger = logging.Logger(
+            log_dir=os.path.join(path_base, 'train'),
+            file_name=f"data_{epi:05d}.h5"
+        )
+        while True:
+            u = agent.get_action(x) + noise.get_noise()
+            xn, r, done, info = env.step(u)
+            item = (x, u, r, xn, done)
+            agent.memorize(item)
+            train_logger.record(**info)
+            x = xn
+            if len(agent.memory) > 64*5:
+                agent.train()
+            if done:
+                break
+        train_logger.close()
+
+        if (epi+1) % env_params["epi_show"] == 0:
+            if env_params['animation']:
+                fig = plt.figure()# {{{
+                ax = fig.gca(projection='3d')
+                camera =Camera(fig)# }}}
+            eval_logger = logging.Logger(
+                log_dir=os.path.join(path_base, 'eval'),
+                file_name=f"data_trained_{(epi+1):05d}.h5"
+            )
+            x = env.reset(random_init=False)
+            while True:
+                u = agent.get_action(x)
+                xn, r, done, info = env.step(u)
+                eval_logger.record(**info)
+                x = xn
+                if env_params['animation']:
+                    snap_ani(ax, info, env_params)# {{{
+                    camera.snap()# }}}
+                if done:
+                    break
+            if env_params['animation']:
+                ani = camera.animate(# {{{
+                    interval=1000*env_params['time_step'], blit=True
+                )
+                path_ani = os.path.join(path_base, f"ani_{(epi+1):05d}.mp4")
+                ani.save(path_ani)# }}}
+            eval_logger.close()
+            plt.close('all')
+            cost = make_figure(
+                os.path.join(path_base, 'eval'),
+                (epi+1),
+                env_params
+            )
+            cost_his.append([epi+1, cost])
+            torch.save({
+                'target_actor': agent.target_actor.state_dict(),
+                'target_critic': agent.target_critic.state_dict()
+            }, os.path.join(path_base, 'eval', f"parameters_{epi+1:05d}.pt"))
+    cost_his = np.array(cost_his)
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(cost_his[:,0], cost_his[:,1], "*")
+    ax.grid(True)
+    ax.set_title(f"Cost according to number of trained episode")
+    ax.set_xlabel("Number of trained episode")
+    ax.set_ylabel("Cost")
+    fig.savefig(
+        os.path.join(path_base, f"Cost_{env_params['epi_num']:d}"),
+        bbox_inches='tight'
+    )
+    plt.close('all')
+    env.close()
+    logger = logging.Logger(
+        log_dir=path_base, file_name='params_and_cost.h5'
+    )
+    logger.set_info(**env_params)
+    logger.record(cost_his=cost_his)
+    logger.close()
 def make_figure(path, epi_num, env_params):
-    data = logging.load(os.path.join(path, f"data_trained_{epi_num:05d}.h5"))
+    data = logging.load(os.path.join(path, f"data_trained_{epi_num:05d}.h5"))# {{{
 
     quad_num = env_params['quad_num']
     time = data['time']
@@ -731,16 +842,27 @@ def make_figure(path, epi_num, env_params):
         bbox_inches='tight'
     )
 
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(time, reward, 'r')
+    ax.set_title("Reward")
+    ax.set_ylabel('reward')
+    ax.set_xlabel("time [s]")
+    ax.grid(True)
+    fig.savefig(
+        os.path.join(path, f"reward_{epi_num:05d}"),
+        bbox_inches='tight'
+    )
+
     plt.close('all')
 
     G = 0
     for r in reward[::-1]:
         G = r.item() + 0.999*G
-    return G
+    return G# }}}
 
 def make_figure_3col(x, y, title, xlabel, ylabel,
                      file_name, path, unwrap=False):
-    fig, ax = plt.subplots(nrows=3, ncols=1)
+    fig, ax = plt.subplots(nrows=3, ncols=1)# {{{
     if unwrap:
         ax[0].plot(x, np.unwrap(y[:,0], axis=0))
         ax[1].plot(x, np.unwrap(y[:,1], axis=0))
@@ -760,10 +882,10 @@ def make_figure_3col(x, y, title, xlabel, ylabel,
         os.path.join(path, file_name),
         bbox_inches='tight'
     )
-    plt.close('all')
+    plt.close('all')# }}}
 
 def snap_ani(ax, info, params):
-    load_pos = info['load_pos']
+    load_pos = info['load_pos']# {{{
     quad_pos = info['quad_pos']
     quad_num = params['quad_num']
     anchor_pos = info["anchor_pos"]
@@ -807,7 +929,7 @@ def snap_ani(ax, info, params):
     # axis limit
     ax.set_xlim3d(-30, 30)
     ax.set_ylim3d(-30, 30)
-    ax.set_zlim3d(-5, 55)
+    ax.set_zlim3d(-5, 55)# }}}
 
 if __name__ == "__main__":
     path_base = os.path.join(
@@ -826,10 +948,10 @@ if __name__ == "__main__":
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1))
     env_params = {
-        'epi_num': 1000,
-        'epi_show': 100,
+        'epi_num': 10,
+        'epi_show': 5,
         'time_step': 0.01,
-        'max_t': 5.,
+        'max_t': 10.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': np.eye(3),
@@ -854,33 +976,4 @@ if __name__ == "__main__":
     }
 
     main(path_base, env_params)
-
-    cost_his = np.array(
-        [[(i+1)*env_params["epi_show"],
-          make_figure(
-              os.path.join(path_base, 'eval'),
-              (i+1)*env_params['epi_show'],
-              env_params
-          )]
-          for i in range(int(env_params["epi_num"]/env_params["epi_show"]))]
-    )
-
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(cost_his[:,0], cost_his[:,1], "*")
-    ax.grid(True)
-    ax.set_title(f"Cost according to number of trained episode")
-    ax.set_xlabel("Number of trained episode")
-    ax.set_ylabel("Cost")
-    fig.savefig(
-        os.path.join(path_base, f"Cost_{env_params['epi_num']:d}"),
-        bbox_inches='tight'
-    )
-    plt.close('all')
-    logger = logging.Logger(
-        log_dir=path_base, file_name='params_and_cost.h5'
-    )
-    logger.set_info(**env_params)
-    logger.record(cost_his=cost_his)
-    logger.close()
-
 

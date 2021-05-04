@@ -319,6 +319,8 @@ class IntergratedDynamics(BaseEnv):
             "anchor_pos": anchor_pos,
             "collisions": collisions,
             "reward": reward,
+            "des_attitude": des_attitude_set,
+            "des_force": des_force_set
         }
         return obs, reward, done, info
 
@@ -436,8 +438,8 @@ class ActorNet(nn.Module):
         x3 = self.relu(self.lin3(x2))
         x4 = self.relu(self.lin4(x3))
         x5 = self.tanh(self.lin5(x4))
-        xScaled = x5 * torch.Tensor(3*[np.pi/3, np.pi/3] + 3*[20.]) +\
-            torch.Tensor(6*[0] + 3*[80.0])
+        xScaled = x5 * torch.Tensor(3*[np.pi/3, np.pi/3] + 3*[20.]) + \
+            torch.Tensor(6*[0.] + 3*[80.0])
         return xScaled
 
 class CriticNet(nn.Module):
@@ -535,53 +537,59 @@ def main(path_base, env_params):
     for epi in tqdm(range(env_params["epi_num"])):
         x = env.reset()
         noise.reset()
-        train_logger = logging.Logger(
-            log_dir=os.path.join(path_base, 'train'),
-            file_name=f"data_{epi:05d}.h5"
-        )
-        while True:
-            u = agent.get_action(x) + noise.get_noise()
-            xn, r, done, info = env.step(u)
-            item = (x, u, r, xn, done)
-            agent.memorize(item)
-            train_logger.record(**info)
-            x = xn
-            if len(agent.memory) > 64*5:
-                agent.train()
-            if done:
-                break
-        train_logger.close()
+        if (epi+1) % env_params["epi_show"] == 0 or epi == 0:
+            train_logger = logging.Logger(
+                log_dir=os.path.join(path_base, 'train'),
+                file_name=f"data_{epi+1:05d}.h5"
+            )
+            while True:
+                u = agent.get_action(x) + noise.get_noise()
+                xn, r, done, info = env.step(u)
+                item = (x, u, r, xn, done)
+                agent.memorize(item)
+                train_logger.record(**info)
+                x = xn
+                if len(agent.memory) > 64*5:
+                    agent.train()
+                if done:
+                    break
+            train_logger.close()
 
-        if (epi+1) % env_params["epi_show"] == 0:
+            x = env.reset(random_init=False)
+            eval_logger = logging.Logger(
+                log_dir=os.path.join(path_base, 'eval', f"epi_{epi+1:05d}"),
+                file_name=f"data_{(epi+1):05d}.h5"
+            )
             if env_params['animation']:
                 fig = plt.figure()# {{{
                 ax = fig.gca(projection='3d')
                 camera =Camera(fig)# }}}
-            eval_logger = logging.Logger(
-                log_dir=os.path.join(path_base, 'eval'),
-                file_name=f"data_trained_{(epi+1):05d}.h5"
-            )
-            x = env.reset(random_init=False)
-            while True:
-                u = agent.get_action(x)
-                xn, r, done, info = env.step(u)
-                eval_logger.record(**info)
-                x = xn
-                if env_params['animation']:
+                while True:
+                    u = agent.get_action(x)
+                    xn, r, done, info = env.step(u)
+                    eval_logger.record(**info)
+                    x = xn
                     snap_ani(ax, info, env_params)# {{{
                     camera.snap()# }}}
-                if done:
-                    break
-            if env_params['animation']:
+                    if done:
+                        break
                 ani = camera.animate(# {{{
                     interval=1000*env_params['time_step'], blit=True
                 )
                 path_ani = os.path.join(path_base, f"ani_{(epi+1):05d}.mp4")
                 ani.save(path_ani)# }}}
+            else:
+                while True:
+                    u = agent.get_action(x)
+                    xn, r, done, info = env.step(u)
+                    eval_logger.record(**info)
+                    x = xn
+                    if done:
+                        break
             eval_logger.close()
             plt.close('all')
             cost = make_figure(
-                os.path.join(path_base, 'eval'),
+                os.path.join(path_base, 'eval', f'epi_{epi+1:05d}'),
                 (epi+1),
                 env_params
             )
@@ -590,6 +598,17 @@ def main(path_base, env_params):
                 'target_actor': agent.target_actor.state_dict(),
                 'target_critic': agent.target_critic.state_dict()
             }, os.path.join(path_base, 'eval', f"parameters_{epi+1:05d}.pt"))
+        else:
+            while True:
+                u = agent.get_action(x) + noise.get_noise()
+                xn, r, done, info = env.step(u)
+                item = (x, u, r, xn, done)
+                agent.memorize(item)
+                x = xn
+                if len(agent.memory) > 64*5:
+                    agent.train()
+                if done:
+                    break
     cost_his = np.array(cost_his)
     fig, ax = plt.subplots(nrows=1, ncols=1)
     ax.plot(cost_his[:,0], cost_his[:,1], "*")
@@ -611,7 +630,7 @@ def main(path_base, env_params):
     logger.close()
 
 def make_figure(path, epi_num, env_params):
-    data = logging.load(os.path.join(path, f"data_trained_{epi_num:05d}.h5"))# {{{
+    data = logging.load(os.path.join(path, f"data_{epi_num:05d}.h5"))# {{{
 
     quad_num = env_params['quad_num']
     time = data['time']
@@ -627,6 +646,8 @@ def make_figure(path, epi_num, env_params):
     distance = data['distance']
     collisions = data['collisions']
     reward = data['reward']
+    des_attitude = data['des_attitude'].squeeze()*180/np.pi
+    des_force = data['des_force']
 
     pos_ylabel = ["X [m]", "Y [m]", "Height [m]"]
     make_figure_3col(
@@ -694,9 +715,11 @@ def make_figure(path, epi_num, env_params):
         path
     ) for i in range(quad_num)]
 
-    [make_figure_3col(
+    [make_figure_compare(
         time,
         quad_ang[:,i,:],
+        des_attitude[:,i,:],
+        ['Quad.', 'Des.'],
         f"Euler angle of quadrotor {i}",
         "time [s]",
         ang_ylabel,
@@ -732,7 +755,7 @@ def make_figure(path, epi_num, env_params):
     ax[0].plot(time, distance[:,0])
     ax[1].plot(time, distance[:,1])
     ax[2].plot(time, distance[:,2])
-    ax[0].set_title("distance from quad to anchor [m]")
+    ax[0].set_title("distance from quad to anchor")
     ax[0].set_ylabel(distance_ylabel[0])
     ax[1].set_ylabel(distance_ylabel[1])
     ax[2].set_ylabel(distance_ylabel[2])
@@ -744,7 +767,6 @@ def make_figure(path, epi_num, env_params):
         os.path.join(path, f"distance_link_to_anchor_{epi_num:05d}"),
         bbox_inches='tight'
     )
-    plt.close('all')
 
     fig, ax = plt.subplots(nrows=1, ncols=1)
     line1, = ax.plot(time, collisions[:,0], 'r')
@@ -772,12 +794,29 @@ def make_figure(path, epi_num, env_params):
         bbox_inches='tight'
     )
 
+    force_ylabel = ["quad0 [N]", "quad1 [N]", "quad2 [N]"]
+    fig, ax = plt.subplots(nrows=3, ncols=1)
+    ax[0].plot(time, des_force[:,0])
+    ax[1].plot(time, des_force[:,1])
+    ax[2].plot(time, des_force[:,2])
+    ax[0].set_title("Desired net force")
+    ax[0].set_ylabel(force_ylabel[0])
+    ax[1].set_ylabel(force_ylabel[1])
+    ax[2].set_ylabel(force_ylabel[2])
+    ax[2].set_xlabel("time [s]")
+    [ax[i].grid(True) for i in range(3)]
+    fig.align_ylabels(ax)
+    fig.savefig(
+        os.path.join(path, f"des_net_force_{epi_num:05d}"),
+        bbox_inches='tight'
+    )
+
     plt.close('all')
 
     G = 0
     for r in reward[::-1]:
         G = r.item() + 0.999*G
-    return G# }}}
+    return G
 
 def make_figure_3col(x, y, title, xlabel, ylabel,
                      file_name, path, unwrap=False):
@@ -790,6 +829,42 @@ def make_figure_3col(x, y, title, xlabel, ylabel,
         ax[0].plot(x, y[:,0])
         ax[1].plot(x, y[:,1])
         ax[2].plot(x, y[:,2])
+    ax[0].set_title(title)
+    ax[0].set_ylabel(ylabel[0])
+    ax[1].set_ylabel(ylabel[1])
+    ax[2].set_ylabel(ylabel[2])
+    ax[2].set_xlabel(xlabel)
+    [ax[i].grid(True) for i in range(3)]
+    fig.align_ylabels(ax)
+    fig.savefig(
+        os.path.join(path, file_name),
+        bbox_inches='tight'
+    )
+    plt.close('all')# }}}
+
+def make_figure_compare(x, y1, y2, legend, title, xlabel, ylabel,
+                     file_name, path, unwrap=False):
+    fig, ax = plt.subplots(nrows=3, ncols=1)# {{{
+    if unwrap:
+        line1, = ax[0].plot(x, np.unwrap(y1[:,0], axis=0), 'r')
+        line2, = ax[0].plot(x, np.unwrap(y2[:,0], axis=0), 'b--')
+        ax[0].legend(
+            handles=(line1, line2),
+            labels=(legend[0], legend[1])
+        )
+        ax[1].plot(x, np.unwrap(y1[:,1], axis=0), 'r',
+                   x, np.unwrap(y2[:,1], axis=0), 'b--')
+        ax[2].plot(x, np.unwrap(y1[:,2], axis=0), 'r',
+                   x, np.unwrap(y2[:,2], axis=0), 'b--')
+    else:
+        line1, = ax[0].plot(x, y1[:,0], 'r')
+        line2, = ax[0].plot(x, y2[:,0], 'b--')
+        ax[0].legend(
+            handles=(line1, line2),
+            labels=(legend[0], legend[1])
+        )
+        ax[1].plot(x, y1[:,1], 'r', x, y2[:,1], 'b--')
+        ax[2].plot(x, y1[:,2], 'r', x, y2[:,2], 'b--')
     ax[0].set_title(title)
     ax[0].set_ylabel(ylabel[0])
     ax[1].set_ylabel(ylabel[1])
@@ -867,10 +942,10 @@ if __name__ == "__main__":
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1))
     env_params = {
-        'epi_num': 10,
-        'epi_show': 5,
+        'epi_num': 6,
+        'epi_show': 3,
         'time_step': 0.01,
-        'max_t': 10.,
+        'max_t': 5.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': np.eye(3),
@@ -886,12 +961,12 @@ if __name__ == "__main__":
             )) - cg_bias for i in range(quad_num)
         ],
         'collision_criteria': 0.5,
-        'gain': 5.,
+        'gain': 0.1,
         'chatter_bound': 0.1,
         'unc_max': 1.,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
-        'animation': True,
+        'animation': False,
     }
 
     main(path_base, env_params)

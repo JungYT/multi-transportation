@@ -410,13 +410,14 @@ class IntergratedDynamics(BaseEnv):
         load_velz = self.load.vel.state[2]
         if (load_posz > 0 or
                 any(x < self.collision_criteria for x in collisions)):
-            r = np.array([-500])
+            r = np.array([-50])
         else:
             r = -(np.linalg.norm(load_ang) +
                   np.linalg.norm(self.load.ang_rate.state) +
                   abs(load_velz)
                   )
-        return r
+        r_scaled = (r + 25) / 25
+        return r_scaled
 
 class ActorNet(nn.Module):
     def __init__(self):
@@ -609,88 +610,6 @@ def main(path_base, env_params):
     logger.record(cost_his=cost_his)
     logger.close()
 
-def main(path_base, env_params):
-    env = IntergratedDynamics(env_params)
-    agent = DDPG()
-    noise = OrnsteinUhlenbeckNoise()
-    cost_his = []
-    for epi in tqdm(range(env_params["epi_num"])):
-        x = env.reset()
-        noise.reset()
-        train_logger = logging.Logger(
-            log_dir=os.path.join(path_base, 'train'),
-            file_name=f"data_{epi:05d}.h5"
-        )
-        while True:
-            u = agent.get_action(x) + noise.get_noise()
-            xn, r, done, info = env.step(u)
-            item = (x, u, r, xn, done)
-            agent.memorize(item)
-            train_logger.record(**info)
-            x = xn
-            if len(agent.memory) > 64*5:
-                agent.train()
-            if done:
-                break
-        train_logger.close()
-
-        if (epi+1) % env_params["epi_show"] == 0:
-            if env_params['animation']:
-                fig = plt.figure()# {{{
-                ax = fig.gca(projection='3d')
-                camera =Camera(fig)# }}}
-            eval_logger = logging.Logger(
-                log_dir=os.path.join(path_base, 'eval'),
-                file_name=f"data_trained_{(epi+1):05d}.h5"
-            )
-            x = env.reset(random_init=False)
-            while True:
-                u = agent.get_action(x)
-                xn, r, done, info = env.step(u)
-                eval_logger.record(**info)
-                x = xn
-                if env_params['animation']:
-                    snap_ani(ax, info, env_params)# {{{
-                    camera.snap()# }}}
-                if done:
-                    break
-            if env_params['animation']:
-                ani = camera.animate(# {{{
-                    interval=1000*env_params['time_step'], blit=True
-                )
-                path_ani = os.path.join(path_base, f"ani_{(epi+1):05d}.mp4")
-                ani.save(path_ani)# }}}
-            eval_logger.close()
-            plt.close('all')
-            cost = make_figure(
-                os.path.join(path_base, 'eval'),
-                (epi+1),
-                env_params
-            )
-            cost_his.append([epi+1, cost])
-            torch.save({
-                'target_actor': agent.target_actor.state_dict(),
-                'target_critic': agent.target_critic.state_dict()
-            }, os.path.join(path_base, 'eval', f"parameters_{epi+1:05d}.pt"))
-    cost_his = np.array(cost_his)
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(cost_his[:,0], cost_his[:,1], "*")
-    ax.grid(True)
-    ax.set_title(f"Cost according to number of trained episode")
-    ax.set_xlabel("Number of trained episode")
-    ax.set_ylabel("Cost")
-    fig.savefig(
-        os.path.join(path_base, f"Cost_{env_params['epi_num']:d}"),
-        bbox_inches='tight'
-    )
-    plt.close('all')
-    env.close()
-    logger = logging.Logger(
-        log_dir=path_base, file_name='params_and_cost.h5'
-    )
-    logger.set_info(**env_params)
-    logger.record(cost_his=cost_his)
-    logger.close()
 def make_figure(path, epi_num, env_params):
     data = logging.load(os.path.join(path, f"data_trained_{epi_num:05d}.h5"))# {{{
 

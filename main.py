@@ -137,7 +137,8 @@ class IntergratedDynamics(BaseEnv):
         self.collision_criteria = env_params['collision_criteria']
         self.g = 9.81
         self.e3 = np.vstack((0.0, 0.0, 1.0))
-        self.K = env_params['gain']
+        self.K_e = env_params['K_e']
+        self.K_s = env_params['K_s']
         self.chatter_bound = env_params['chatter_bound']
         self.unc_max = env_params['unc_max']
         self.M = deque(maxlen=self.quad_num)
@@ -286,12 +287,12 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(self.M[i])
 
     def step(self, action):
-        # des_force_set = 3*[60]
-        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
-        # self.control_attitude(des_attitude_set)
-
-        des_attitude_set, des_force_set = self.reshape_action(action)
+        des_force_set = 3*[90]
+        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
         self.control_attitude(des_attitude_set)
+
+        # des_attitude_set, des_force_set = self.reshape_action(action)
+        # self.control_attitude(des_attitude_set)
         *_, done = self.update(f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
@@ -386,19 +387,40 @@ class IntergratedDynamics(BaseEnv):
             quad_ang = np.vstack(
                 rot.dcm2angle(quad.rot_mat.state.T)[::-1]
             )
-            L = np.array([
-                [1, np.sin(quad_ang[0][0])*np.tan(quad_ang[1][0]),
-                 np.cos(quad_ang[0][0])*np.tan(quad_ang[1][0])],
-                [0, np.cos(quad_ang[0][0]), -np.sin(quad_ang[0][0])],
-                [0, np.sin(quad_ang[0][0])/np.cos(quad_ang[1][0]),
-                 np.cos(quad_ang[0][0])/np.cos(quad_ang[1][0])]
-            ])
-            quad_euler_rate = L.dot(quad.ang_rate.state)
-            s = self.K * (quad_ang - des_attitude_set[i]) + quad_euler_rate
-            s_clip = np.clip(s/self.chatter_bound, -1, 1)
+            phi = quad_ang[0][0]
+            theta = quad_ang[1][0]
+            ang_rate = quad.ang_rate.state
+            ang_rate_hat = hat(ang_rate)
+            wx = quad.ang_rate.state[0].item()
+            wy = quad.ang_rate.state[1].item()
+            wz = quad.ang_rate.state[2].item()
 
-            mu = -self.K * quad_euler_rate - (self.unc_max + 1) * s_clip
-            self.M.append(quad.J.dot(mu))
+            L = np.array([
+                [1, np.sin(phi)*np.tan(theta), np.cos(phi)*np.tan(theta)],
+                [0, np.cos(phi), -np.sin(phi)],
+                [0, np.sin(phi)/np.cos(theta), np.cos(phi)/np.cos(theta)]
+            ])
+            L2 = np.array([
+                [wy*np.cos(phi)*np.tan(theta) - wz*np.sin(phi)*np.tan(theta),
+                 wy*np.sin(phi)/(np.cos(theta))**2 + wz*np.cos(phi)/(np.cos(theta))**2,
+                 0],
+                [-wy*np.sin(phi)-wz*np.cos(phi), 0, 0],
+                [wy*np.cos(phi)/np.cos(theta) - wz*np.sin(phi)*np.cos(theta),
+                 wy*np.sin(phi)*np.tan(theta)/np.cos(theta) - \
+                 wz*np.cos(phi)*np.tan(theta)/np.cos(theta),
+                 0]
+            ])
+            b = np.vstack((wx, 0., 0.))
+
+            e2 = L.dot(quad.ang_rate.state)
+            e1 = quad_ang - des_attitude_set[i]
+            s = self.K_e*e1 + e2
+            s_clip = np.clip(s/self.chatter_bound, -1, 1)
+            M = (quad.J.dot(np.linalg.inv(L))).dot(
+                -self.K_e*e2 - b - L2.dot(e2) - s_clip*(self.unc_max+self.K_s)
+            ) + ang_rate_hat.dot(quad.J.dot(ang_rate))
+
+            self.M.append(M)
 
     def terminate(self, collisions):
         time = self.clock.get()
@@ -438,7 +460,7 @@ class ActorNet(nn.Module):
         x3 = self.relu(self.lin3(x2))
         x4 = self.relu(self.lin4(x3))
         x5 = self.tanh(self.lin5(x4))
-        xScaled = x5 * torch.Tensor(3*[np.pi/3, np.pi/3] + 3*[20.]) + \
+        xScaled = x5 * torch.Tensor(6*[np.pi/3] + 3*[20.]) + \
             torch.Tensor(6*[0.] + 3*[80.0])
         return xScaled
 
@@ -942,8 +964,8 @@ if __name__ == "__main__":
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1))
     env_params = {
-        'epi_num': 6,
-        'epi_show': 3,
+        'epi_num': 2000,
+        'epi_show': 200,
         'time_step': 0.01,
         'max_t': 5.,
         'load_mass': 10.,
@@ -961,9 +983,10 @@ if __name__ == "__main__":
             )) - cg_bias for i in range(quad_num)
         ],
         'collision_criteria': 0.5,
-        'gain': 0.1,
-        'chatter_bound': 0.1,
-        'unc_max': 1.,
+        'K_e': 20.,
+        'K_s': 80.,
+        'chatter_bound': 0.5,
+        'unc_max': 0.1,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
         'animation': False,

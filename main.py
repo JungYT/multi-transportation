@@ -287,12 +287,12 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(self.M[i])
 
     def step(self, action):
-        des_force_set = 3*[90]
-        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
-        self.control_attitude(des_attitude_set)
-
-        # des_attitude_set, des_force_set = self.reshape_action(action)
+        # des_force_set = 3*[90]
+        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
         # self.control_attitude(des_attitude_set)
+
+        des_attitude_set, des_force_set = self.reshape_action(action)
+        self.control_attitude(des_attitude_set)
         *_, done = self.update(f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
@@ -326,7 +326,7 @@ class IntergratedDynamics(BaseEnv):
         return obs, reward, done, info
 
     def reshape_action(self, action):
-        des_attitude_set = [np.vstack(np.append(action[i:i+2], 0))
+        des_attitude_set = [np.vstack(np.append(action[2*i:2*(i+1)], 0.))
                             for i in range(self.quad_num)]
         des_force_set = action[self.quad_num*2:]
         return des_attitude_set, des_force_set
@@ -566,7 +566,8 @@ def main(path_base, env_params):
             )
             while True:
                 u = agent.get_action(x) + noise.get_noise()
-                xn, r, done, info = env.step(u)
+                for i in range(env_params['agent_freq']):
+                    xn, r, done, info = env.step(u)
                 item = (x, u, r, xn, done)
                 agent.memorize(item)
                 train_logger.record(**info)
@@ -588,23 +589,25 @@ def main(path_base, env_params):
                 camera =Camera(fig)# }}}
                 while True:
                     u = agent.get_action(x)
-                    xn, r, done, info = env.step(u)
-                    eval_logger.record(**info)
+                    for i in range(env_params['agent_freq']):
+                        xn, r, done, info = env.step(u)
+                        eval_logger.record(**info)
+                        snap_ani(ax, info, env_params)
+                        camera.snap()
                     x = xn
-                    snap_ani(ax, info, env_params)# {{{
-                    camera.snap()# }}}
                     if done:
                         break
-                ani = camera.animate(# {{{
+                ani = camera.animate(
                     interval=1000*env_params['time_step'], blit=True
                 )
                 path_ani = os.path.join(path_base, f"ani_{(epi+1):05d}.mp4")
-                ani.save(path_ani)# }}}
+                ani.save(path_ani)
             else:
                 while True:
                     u = agent.get_action(x)
-                    xn, r, done, info = env.step(u)
-                    eval_logger.record(**info)
+                    for i in range(env_params['agent_freq']):
+                        xn, r, done, info = env.step(u)
+                        eval_logger.record(**info)
                     x = xn
                     if done:
                         break
@@ -623,7 +626,8 @@ def main(path_base, env_params):
         else:
             while True:
                 u = agent.get_action(x) + noise.get_noise()
-                xn, r, done, info = env.step(u)
+                for i in range(env_params['agent_freq']):
+                    xn, r, done, info = env.step(u)
                 item = (x, u, r, xn, done)
                 agent.memorize(item)
                 x = xn
@@ -958,9 +962,9 @@ if __name__ == "__main__":
     In simulation, rotation matrix follows robotic convention,
     which means transformation matrix from body to ref.
     """
-    # quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x ord
-    quad_rot_mat_init = rot.angle2dcm(np.pi/3, np.pi/4, np.pi/6).T # z-y-x ord
-    # quad_rot_mat_init = rot.angle2dcm(0, 0, np.pi/6).T # z-y-x ord
+    # quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x order
+    quad_rot_mat_init = rot.angle2dcm(0, np.pi/6, np.pi/6).T # z-y-x order
+    # quad_rot_mat_init = rot.angle2dcm(0, 0, np.pi/6).T # z-y-x order
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1))
     env_params = {
@@ -989,7 +993,8 @@ if __name__ == "__main__":
         'unc_max': 0.1,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
-        'animation': False,
+        'agent_freq': 30,
+        'animation': True,
     }
 
     main(path_base, env_params)

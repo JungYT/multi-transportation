@@ -205,7 +205,7 @@ class IntergratedDynamics(BaseEnv):
         obs = self.observe()
         return obs
 
-    def set_dot(self, t, f_des):
+    def set_dot(self, t, R_des, f_des):
         m_T = self.load.mass
         R0 = self.load.rot_mat.state
         Omega = self.load.ang_rate.state
@@ -269,6 +269,7 @@ class IntergratedDynamics(BaseEnv):
         load_acc = np.linalg.inv(C).dot(Mq.dot(self.g*self.e3) + S1 - S2.dot(B))
         load_ang_acc = A.dot(load_acc) + B
         self.load.set_dot(load_acc, load_ang_acc)
+        M_set = self.control_attitude(R_des)
         for i, (link, quad) in enumerate(
                 zip(self.links.systems, self.quads.systems)
         ):
@@ -284,7 +285,7 @@ class IntergratedDynamics(BaseEnv):
 
             link_ang_acc = q_hat.dot(load_acc + R0_Omega2_rho - D) / l
             link.set_dot(link_ang_acc)
-            quad.set_dot(self.M[i])
+            quad.set_dot(M_set[i])
 
     def step(self, action):
         # des_force_set = 3*[90]
@@ -292,8 +293,7 @@ class IntergratedDynamics(BaseEnv):
         # self.control_attitude(des_attitude_set)
 
         des_attitude_set, des_force_set = self.reshape_action(action)
-        self.control_attitude(des_attitude_set)
-        *_, done = self.update(f_des=des_force_set)
+        *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
         load_ang = np.vstack(rot.dcm2angle(self.load.rot_mat.state.T))[::-1]
@@ -383,6 +383,7 @@ class IntergratedDynamics(BaseEnv):
             quad_rot_mat, anchor_pos, collisions
 
     def control_attitude(self, des_attitude_set):
+        M_set = []
         for i, quad in enumerate(self.quads.systems):
             quad_ang = np.vstack(
                 rot.dcm2angle(quad.rot_mat.state.T)[::-1]
@@ -420,7 +421,9 @@ class IntergratedDynamics(BaseEnv):
                 -self.K_e*e2 - b - L2.dot(e2) - s_clip*(self.unc_max+self.K_s)
             ) + ang_rate_hat.dot(quad.J.dot(ang_rate))
 
+            M_set.append(M)
             self.M.append(M)
+        return M_set
 
     def terminate(self, collisions):
         time = self.clock.get()
@@ -968,10 +971,10 @@ if __name__ == "__main__":
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1))
     env_params = {
-        'epi_num': 2000,
-        'epi_show': 200,
+        'epi_num': 1,
+        'epi_show': 1,
         'time_step': 0.01,
-        'max_t': 5.,
+        'max_t': 1.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': np.eye(3),

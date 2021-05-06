@@ -269,6 +269,7 @@ class IntergratedDynamics(BaseEnv):
         load_acc = np.linalg.inv(C).dot(Mq.dot(self.g*self.e3) + S1 - S2.dot(B))
         load_ang_acc = A.dot(load_acc) + B
         self.load.set_dot(load_acc, load_ang_acc)
+
         M_set = self.control_attitude(R_des)
         for i, (link, quad) in enumerate(
                 zip(self.links.systems, self.quads.systems)
@@ -288,11 +289,10 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(M_set[i])
 
     def step(self, action):
-        # des_force_set = 3*[90]
-        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
-        # self.control_attitude(des_attitude_set)
+        des_force_set = 3*[90]
+        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
 
-        des_attitude_set, des_force_set = self.reshape_action(action)
+        # des_attitude_set, des_force_set = self.reshape_action(action)
         *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
@@ -412,6 +412,8 @@ class IntergratedDynamics(BaseEnv):
                  0]
             ])
             b = np.vstack((wx, 0., 0.))
+            if np.linalg.matrix_rank(L) < 3:
+                print(np.linalg.matrix_rank(L))
 
             e2 = L.dot(quad.ang_rate.state)
             e1 = quad_ang - des_attitude_set[i]
@@ -559,6 +561,7 @@ def main(path_base, env_params):
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []
+    tmp = 1
     for epi in tqdm(range(env_params["epi_num"])):
         x = env.reset()
         noise.reset()
@@ -569,7 +572,7 @@ def main(path_base, env_params):
             )
             while True:
                 u = agent.get_action(x) + noise.get_noise()
-                for i in range(env_params['agent_freq']):
+                for i in range(tmp):
                     xn, r, done, info = env.step(u)
                 item = (x, u, r, xn, done)
                 agent.memorize(item)
@@ -592,11 +595,11 @@ def main(path_base, env_params):
                 camera =Camera(fig)# }}}
                 while True:
                     u = agent.get_action(x)
-                    for i in range(env_params['agent_freq']):
+                    for i in range(tmp):
                         xn, r, done, info = env.step(u)
-                        eval_logger.record(**info)
                         snap_ani(ax, info, env_params)
                         camera.snap()
+                        eval_logger.record(**info)
                     x = xn
                     if done:
                         break
@@ -608,7 +611,7 @@ def main(path_base, env_params):
             else:
                 while True:
                     u = agent.get_action(x)
-                    for i in range(env_params['agent_freq']):
+                    for i in range(tmp):
                         xn, r, done, info = env.step(u)
                         eval_logger.record(**info)
                     x = xn
@@ -629,7 +632,7 @@ def main(path_base, env_params):
         else:
             while True:
                 u = agent.get_action(x) + noise.get_noise()
-                for i in range(env_params['agent_freq']):
+                for i in range(tmp):
                     xn, r, done, info = env.step(u)
                 item = (x, u, r, xn, done)
                 agent.memorize(item)
@@ -965,16 +968,16 @@ if __name__ == "__main__":
     In simulation, rotation matrix follows robotic convention,
     which means transformation matrix from body to ref.
     """
-    # quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x order
-    quad_rot_mat_init = rot.angle2dcm(0, np.pi/6, np.pi/6).T # z-y-x order
+    quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x order
+    # quad_rot_mat_init = rot.angle2dcm(0., np.pi/4, np.pi/6).T # z-y-x order
     # quad_rot_mat_init = rot.angle2dcm(0, 0, np.pi/6).T # z-y-x order
     anchor_radius = 1.
-    cg_bias = np.vstack((0.0, 0.0, 1))
+    cg_bias = np.vstack((0.0, 0.0, 1.))
     env_params = {
         'epi_num': 1,
         'epi_show': 1,
-        'time_step': 0.01,
-        'max_t': 1.,
+        'time_step': 0.1,
+        'max_t': 10.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': np.eye(3),
@@ -996,8 +999,7 @@ if __name__ == "__main__":
         'unc_max': 0.1,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
-        'agent_freq': 30,
-        'animation': True,
+        'animation': False,
     }
 
     main(path_base, env_params)

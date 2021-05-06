@@ -289,10 +289,10 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(M_set[i])
 
     def step(self, action):
-        des_force_set = 3*[90]
-        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
+        # des_force_set = 3*[90]
+        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
 
-        # des_attitude_set, des_force_set = self.reshape_action(action)
+        des_attitude_set, des_force_set = self.reshape_action(action)
         *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
@@ -561,7 +561,7 @@ def main(path_base, env_params):
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []
-    tmp = 1
+    tmp = 30
     for epi in tqdm(range(env_params["epi_num"])):
         x = env.reset()
         noise.reset()
@@ -974,10 +974,10 @@ if __name__ == "__main__":
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1.))
     env_params = {
-        'epi_num': 1,
-        'epi_show': 1,
-        'time_step': 0.1,
-        'max_t': 10.,
+        'epi_num': 5000,
+        'epi_show': 500,
+        'time_step': 0.01,
+        'max_t': 3.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': np.eye(3),
@@ -999,7 +999,7 @@ if __name__ == "__main__":
         'unc_max': 0.1,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
-        'animation': False,
+        'animation': True,
     }
 
     main(path_base, env_params)

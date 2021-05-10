@@ -154,11 +154,21 @@ class IntergratedDynamics(BaseEnv):
     def reset(self, random_init=True):
         super().reset()
         if random_init:
-            self.load.pos.state[2] = np.random.uniform(
-                low=-5.,
-                high=-10.
-            ),
-            self.load.ang_rate.dot = np.vstack((
+            self.load.pos.state = np.vstack((
+                np.random.uniform(
+                    low=-5.,
+                    high=5.
+                ),
+                np.random.uniform(
+                    low=-5.,
+                    high=5.
+                ),
+                np.random.uniform(
+                    low=-5.,
+                    high=-10.
+                )
+            ))
+            self.load.vel.state = np.vstack((
                 np.random.uniform(
                     low=-0.5,
                     high=0.5
@@ -174,31 +184,60 @@ class IntergratedDynamics(BaseEnv):
             ))
             self.load.rot_mat.state = rot.angle2dcm(
                 np.random.uniform(
-                    low=-np.pi/6,
-                    high=np.pi/6
+                    low=-np.pi/4,
+                    high=np.pi/4
                 ),
                 np.random.uniform(
-                    low=-np.pi/6,
-                    high=np.pi/6
+                    low=-np.pi/4,
+                    high=np.pi/4
                 ),
                 np.random.uniform(
-                    low=-np.pi/6,
-                    high=np.pi/6
+                    low=-np.pi/4,
+                    high=np.pi/4
                 )
             ).T
+            self.load.ang_rate.state = np.vstack((
+                np.random.uniform(
+                    low=-0.5,
+                    high=0.5
+                ),
+                np.random.uniform(
+                    low=-0.5,
+                    high=0.5
+                ),
+                np.random.uniform(
+                    low=-0.5,
+                    high=0.5
+                )
+            ))
             tmp = [np.random.rand(3, 1) for i in range(self.quad_num)]
             for i, link in enumerate(self.links.systems):
                 link.link.state = tmp[i]/np.linalg.norm(tmp[i])
 
+            for link in self.links.systems:
+                link.ang_rate.state = np.vstack((
+                    np.random.uniform(
+                        low=-0.5,
+                        high=0.5
+                    ),
+                    np.random.uniform(
+                        low=-0.5,
+                        high=0.5
+                    ),
+                    np.random.uniform(
+                        low=-0.5,
+                        high=0.5
+                    )
+                ))
             for quad in self.quads.systems:
                 quad.rot_mat.state = rot.angle2dcm(
                     np.random.uniform(
-                        low=-np.pi/6,
-                        high=np.pi/6
+                        low=-np.pi/4,
+                        high=np.pi/4
                     ),
                     np.random.uniform(
-                        low=-np.pi/6,
-                        high=np.pi/6
+                        low=-np.pi/4,
+                        high=np.pi/4
                     ),
                     0
                 ).T
@@ -289,10 +328,10 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(M_set[i])
 
     def step(self, action):
-        # des_force_set = 3*[90]
-        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
+        des_force_set = 3*[90]
+        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
 
-        des_attitude_set, des_force_set = self.reshape_action(action)
+        # des_attitude_set, des_force_set = self.reshape_action(action)
         *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
@@ -302,6 +341,7 @@ class IntergratedDynamics(BaseEnv):
                     for i in range(self.quad_num)]
         obs = self.observe()
         reward = self.get_reward(collisions, load_ang)
+        e_set = [quad_ang[i] - des_attitude_set[i] for i in range(self.quad_num)]
 
         info = {
             "time": time,
@@ -321,7 +361,8 @@ class IntergratedDynamics(BaseEnv):
             "collisions": collisions,
             "reward": reward,
             "des_attitude": des_attitude_set,
-            "des_force": des_force_set
+            "des_force": des_force_set,
+            "error": e_set,
         }
         return obs, reward, done, info
 
@@ -342,7 +383,7 @@ class IntergratedDynamics(BaseEnv):
         link_state = [
             rot.velocity2polar(link.link.state)[1:]
             for link in self.links.systems
-        ]
+        ] + [link.ang_rate.state.reshape(-1,) for link in self.links.systems]
         quad_state = [
             np.array(rot.dcm2angle(quad.rot_mat.state.T))[::-1][0:2]
             for quad in self.quads.systems
@@ -436,22 +477,19 @@ class IntergratedDynamics(BaseEnv):
 
     def get_reward(self, collisions, load_ang):
         load_posz = self.load.pos.state[2]
-        load_velz = self.load.vel.state[2]
         if (load_posz > 0 or
                 any(x < self.collision_criteria for x in collisions)):
             r = np.array([-50])
         else:
-            r = -(np.linalg.norm(load_ang) +
-                  np.linalg.norm(self.load.ang_rate.state) +
-                  abs(load_velz)
-                  )
+            r = -(np.linalg.norm(load_ang)**2 +
+                  (load_posz + 5)**2)
         r_scaled = (r + 25) / 25
         return r_scaled
 
 class ActorNet(nn.Module):
     def __init__(self):
         super(ActorNet, self).__init__()
-        self.lin1 = nn.Linear(20, 128)
+        self.lin1 = nn.Linear(29, 128)
         self.lin2 = nn.Linear(128, 64)
         self.lin3 = nn.Linear(64, 32)
         self.lin4 = nn.Linear(32, 16)
@@ -472,7 +510,7 @@ class ActorNet(nn.Module):
 class CriticNet(nn.Module):
     def __init__(self):
         super(CriticNet, self).__init__()
-        self.lin1 = nn.Linear(20+9, 128)
+        self.lin1 = nn.Linear(29+9, 128)
         self.lin2 = nn.Linear(128, 64)
         self.lin3 = nn.Linear(64, 32)
         self.lin4 = nn.Linear(32, 16)
@@ -561,7 +599,7 @@ def main(path_base, env_params):
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []
-    tmp = 30
+    tmp = 1
     for epi in tqdm(range(env_params["epi_num"])):
         x = env.reset()
         noise.reset()
@@ -680,6 +718,7 @@ def make_figure(path, epi_num, env_params):
     reward = data['reward']
     des_attitude = data['des_attitude'].squeeze()*180/np.pi
     des_force = data['des_force']
+    error = data['error']
 
     pos_ylabel = ["X [m]", "Y [m]", "Height [m]"]
     make_figure_3col(
@@ -961,28 +1000,29 @@ if __name__ == "__main__":
     path_base = os.path.join(
         'log', datetime.today().strftime('%Y%m%d-%H%M%S')
     )
-    quad_num = 3
     """
     rot.angle2dcm converts angle to transformation matrix
     which transforms from ref. to body coordinate.
     In simulation, rotation matrix follows robotic convention,
     which means transformation matrix from body to ref.
     """
-    quad_rot_mat_init = rot.angle2dcm(-np.pi/3, np.pi/4, np.pi/6).T # z-y-x order
     # quad_rot_mat_init = rot.angle2dcm(0., np.pi/4, np.pi/6).T # z-y-x order
     # quad_rot_mat_init = rot.angle2dcm(0, 0, np.pi/6).T # z-y-x order
     anchor_radius = 1.
     cg_bias = np.vstack((0.0, 0.0, 1.))
+    quad_num = 3
     env_params = {
-        'epi_num': 5000,
-        'epi_show': 500,
+        'epi_num': 1,
+        'epi_show': 1,
         'time_step': 0.01,
-        'max_t': 3.,
+        'max_t': 5.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
-        'load_rot_mat_init': np.eye(3),
-        'quad_num': quad_num,
-        'quad_rot_mat_init': quad_num*[quad_rot_mat_init],
+        'load_rot_mat_init': rot.angle2dcm(0, np.pi/6, np.pi/6).T,
+        'quad_num': 3,
+        'quad_rot_mat_init': quad_num * [
+            rot.angle2dcm(-np.pi/6, np.pi/6, np.pi/6).T
+        ],
         'link_len': quad_num*[3.],
         'link_init': quad_num*[np.vstack((0.0, 0.0, 1.0))],
         'link_rho': [
@@ -999,7 +1039,7 @@ if __name__ == "__main__":
         'unc_max': 0.1,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
-        'animation': True,
+        'animation': False,
     }
 
     main(path_base, env_params)

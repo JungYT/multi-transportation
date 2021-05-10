@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import os
+import math
 
 from tqdm import tqdm
 from datetime import datetime
@@ -66,6 +67,7 @@ def hat(v):
 
 def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi
+
 
 class Load(BaseEnv):
     def __init__(self, mass, pos_init, rot_mat_init):
@@ -150,6 +152,7 @@ class IntergratedDynamics(BaseEnv):
         self.S5_set = deque(maxlen=self.quad_num)
         self.S6_set = deque(maxlen=self.quad_num)
         self.S7_set = deque(maxlen=self.quad_num)
+        self.logger = logging.Logger('test.h5')
 
     def reset(self, random_init=True):
         super().reset()
@@ -343,6 +346,8 @@ class IntergratedDynamics(BaseEnv):
         reward = self.get_reward(collisions, load_ang)
         e_set = [quad_ang[i] - des_attitude_set[i] for i in range(self.quad_num)]
 
+        # if self.clock.get() > 1:
+        #     breakpoint()
         info = {
             "time": time,
             "load_pos": self.load.pos.state,
@@ -365,6 +370,9 @@ class IntergratedDynamics(BaseEnv):
             "error": e_set,
         }
         return obs, reward, done, info
+
+    def logger_callback(self, i, t, y, t_hist, ode_hist):
+        return dict(time=t, moment=self.M)
 
     def reshape_action(self, action):
         des_attitude_set = [np.vstack(np.append(action[2*i:2*(i+1)], 0.))
@@ -453,8 +461,6 @@ class IntergratedDynamics(BaseEnv):
                  0]
             ])
             b = np.vstack((wx, 0., 0.))
-            if np.linalg.matrix_rank(L) < 3:
-                print(np.linalg.matrix_rank(L))
 
             e2 = L.dot(quad.ang_rate.state)
             e1 = quad_ang - des_attitude_set[i]
@@ -599,7 +605,6 @@ def main(path_base, env_params):
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []
-    tmp = 1
     for epi in tqdm(range(env_params["epi_num"])):
         x = env.reset()
         noise.reset()
@@ -610,8 +615,7 @@ def main(path_base, env_params):
             )
             while True:
                 u = agent.get_action(x) + noise.get_noise()
-                for i in range(tmp):
-                    xn, r, done, info = env.step(u)
+                xn, r, done, info = env.step(u)
                 item = (x, u, r, xn, done)
                 agent.memorize(item)
                 train_logger.record(**info)
@@ -633,11 +637,10 @@ def main(path_base, env_params):
                 camera =Camera(fig)# }}}
                 while True:
                     u = agent.get_action(x)
-                    for i in range(tmp):
-                        xn, r, done, info = env.step(u)
-                        snap_ani(ax, info, env_params)
-                        camera.snap()
-                        eval_logger.record(**info)
+                    xn, r, done, info = env.step(u)
+                    snap_ani(ax, info, env_params)
+                    camera.snap()
+                    eval_logger.record(**info)
                     x = xn
                     if done:
                         break
@@ -649,14 +652,14 @@ def main(path_base, env_params):
             else:
                 while True:
                     u = agent.get_action(x)
-                    for i in range(tmp):
-                        xn, r, done, info = env.step(u)
-                        eval_logger.record(**info)
+                    xn, r, done, info = env.step(u)
+                    eval_logger.record(**info)
                     x = xn
                     if done:
                         break
             eval_logger.close()
             plt.close('all')
+            env.logger.close()
             cost = make_figure(
                 os.path.join(path_base, 'eval', f'epi_{epi+1:05d}'),
                 (epi+1),
@@ -670,8 +673,7 @@ def main(path_base, env_params):
         else:
             while True:
                 u = agent.get_action(x) + noise.get_noise()
-                for i in range(tmp):
-                    xn, r, done, info = env.step(u)
+                xn, r, done, info = env.step(u)
                 item = (x, u, r, xn, done)
                 agent.memorize(item)
                 x = xn
@@ -701,24 +703,28 @@ def main(path_base, env_params):
 
 def make_figure(path, epi_num, env_params):
     data = logging.load(os.path.join(path, f"data_{epi_num:05d}.h5"))# {{{
+    data_test = logging.load('test.h5')
 
     quad_num = env_params['quad_num']
     time = data['time']
     load_pos = data['load_pos']
     load_vel = data['load_vel']
-    load_ang = data['load_ang']*180/np.pi
-    load_ang_rate = data['load_ang_rate']*180/np.pi
+    load_ang = np.unwrap(data['load_ang'])*180/np.pi
+    load_ang_rate = np.unwrap(data['load_ang_rate'])*180/np.pi
     quad_pos = data['quad_pos']
     quad_vel = data['quad_vel']
-    quad_ang = data['quad_ang']*180/np.pi
-    quad_ang_rate = data['quad_ang_rate']*180/np.pi
+    quad_ang = np.unwrap(data['quad_ang'])*180/np.pi
+    quad_ang_rate = np.unwrap(data['quad_ang_rate'])*180/np.pi
     moment = data['moment']
     distance = data['distance']
     collisions = data['collisions']
     reward = data['reward']
-    des_attitude = data['des_attitude'].squeeze()*180/np.pi
+    des_attitude = np.unwrap(data['des_attitude'].squeeze())*180/np.pi
     des_force = data['des_force']
     error = data['error']
+    moment_test = data_test['moment']
+    time_test = data_test['time']
+    breakpoint()
 
     pos_ylabel = ["X [m]", "Y [m]", "Height [m]"]
     make_figure_3col(
@@ -748,8 +754,7 @@ def make_figure(path, epi_num, env_params):
         "time [s]",
         ang_ylabel,
         f"load_ang_{epi_num:05d}",
-        path,
-        unwrap=True
+        path
     )
     ang_rate_ylabel = [
         "$\dot{\phi}$ [deg/s]",
@@ -795,8 +800,7 @@ def make_figure(path, epi_num, env_params):
         "time [s]",
         ang_ylabel,
         f"quad_ang_{i}_{epi_num:05d}",
-        path,
-        unwrap=True
+        path
     ) for i in range(quad_num)]
 
     [make_figure_3col(
@@ -817,6 +821,17 @@ def make_figure(path, epi_num, env_params):
         "time [s]",
         moment_ylabel,
         f"quad_moment_{i}_{epi_num:05d}",
+        path
+    ) for i in range(quad_num)]
+
+    moment_ylabel = ["$M_x$ [Nm]", "$M_y$ [Nm]", "$M_z$ [Nm]"]
+    [make_figure_3col(
+        time_test,
+        moment_test[:,i,:],
+        f"Moment of quadrotor {i}",
+        "time [s]",
+        moment_ylabel,
+        f"test_{i}_{epi_num:05d}",
         path
     ) for i in range(quad_num)]
 
@@ -890,16 +905,11 @@ def make_figure(path, epi_num, env_params):
     return G
 
 def make_figure_3col(x, y, title, xlabel, ylabel,
-                     file_name, path, unwrap=False):
+                     file_name, path):
     fig, ax = plt.subplots(nrows=3, ncols=1)# {{{
-    if unwrap:
-        ax[0].plot(x, np.unwrap(y[:,0], axis=0))
-        ax[1].plot(x, np.unwrap(y[:,1], axis=0))
-        ax[2].plot(x, np.unwrap(y[:,2], axis=0))
-    else:
-        ax[0].plot(x, y[:,0])
-        ax[1].plot(x, y[:,1])
-        ax[2].plot(x, y[:,2])
+    ax[0].plot(x, y[:,0])
+    ax[1].plot(x, y[:,1])
+    ax[2].plot(x, y[:,2])
     ax[0].set_title(title)
     ax[0].set_ylabel(ylabel[0])
     ax[1].set_ylabel(ylabel[1])
@@ -914,28 +924,16 @@ def make_figure_3col(x, y, title, xlabel, ylabel,
     plt.close('all')# }}}
 
 def make_figure_compare(x, y1, y2, legend, title, xlabel, ylabel,
-                     file_name, path, unwrap=False):
+                     file_name, path):
     fig, ax = plt.subplots(nrows=3, ncols=1)# {{{
-    if unwrap:
-        line1, = ax[0].plot(x, np.unwrap(y1[:,0], axis=0), 'r')
-        line2, = ax[0].plot(x, np.unwrap(y2[:,0], axis=0), 'b--')
-        ax[0].legend(
-            handles=(line1, line2),
-            labels=(legend[0], legend[1])
-        )
-        ax[1].plot(x, np.unwrap(y1[:,1], axis=0), 'r',
-                   x, np.unwrap(y2[:,1], axis=0), 'b--')
-        ax[2].plot(x, np.unwrap(y1[:,2], axis=0), 'r',
-                   x, np.unwrap(y2[:,2], axis=0), 'b--')
-    else:
-        line1, = ax[0].plot(x, y1[:,0], 'r')
-        line2, = ax[0].plot(x, y2[:,0], 'b--')
-        ax[0].legend(
-            handles=(line1, line2),
-            labels=(legend[0], legend[1])
-        )
-        ax[1].plot(x, y1[:,1], 'r', x, y2[:,1], 'b--')
-        ax[2].plot(x, y1[:,2], 'r', x, y2[:,2], 'b--')
+    line1, = ax[0].plot(x, y1[:,0], 'r')
+    line2, = ax[0].plot(x, y2[:,0], 'b--')
+    ax[0].legend(
+        handles=(line1, line2),
+        labels=(legend[0], legend[1])
+    )
+    ax[1].plot(x, y1[:,1], 'r', x, y2[:,1], 'b--')
+    ax[2].plot(x, y1[:,2], 'r', x, y2[:,2], 'b--')
     ax[0].set_title(title)
     ax[0].set_ylabel(ylabel[0])
     ax[1].set_ylabel(ylabel[1])
@@ -1014,8 +1012,8 @@ if __name__ == "__main__":
     env_params = {
         'epi_num': 1,
         'epi_show': 1,
-        'time_step': 0.01,
-        'max_t': 5.,
+        'time_step': 0.1,
+        'max_t': 1.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': rot.angle2dcm(0, np.pi/6, np.pi/6).T,

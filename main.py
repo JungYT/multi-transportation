@@ -1,7 +1,14 @@
+"""
+rot.angle2dcm converts angle to transformation matrix
+which transforms from ref. to body coordinate.
+In simulation, rotation matrix follows robotic convention,
+which means transformation matrix from body to ref.
+"""
 import numpy as np
 import random
 import os
-import math
+from types import SimpleNamespace as SN
+from pathlib import Path
 
 from tqdm import tqdm
 from datetime import datetime
@@ -22,6 +29,49 @@ np.random.seed(0)
 random.seed(0)
 torch.cuda.manual_seed(0)
 torch.cuda.manual_seed_all(0)
+
+cfg = SN()
+
+def load_config():
+    cfg.dt = 0.1
+    cfg.max_t = 1.
+    cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
+    cfg.animation = True
+    cfg.epi_train = 1
+    cfg.epi_eval = 1
+    cfg.collision = 0.5
+
+    cfg.controller = SN()
+    cfg.controller.K_e = 20.
+    cfg.controller.K_s = 80.
+    cfg.controller.chattering = 0.5
+    cfg.controller.unc_max = 0.1
+
+    cfg.load = SN()
+    cfg.load.mass = 10.
+    cfg.load.pos = np.vstack((0., 0., -5.))
+    cfg.load.dcm = rot.angle2dcm(-np.pi/6, np.pi/6, np.pi/6).T
+    cfg.load.cg = np.vstack((0., 0., 1.))
+
+    cfg.quad = SN()
+    cfg.quad.num = 3
+    cfg.quad.dcm = cfg.quad.num * [
+        rot.angle2dcm(-np.pi/6, np.pi/6, np.pi/6).T
+    ]
+
+    cfg.link = SN()
+    cfg.link.len = cfg.quad.num * [3.]
+    cfg.link.direction = cfg.quad.num * [
+        np.vstack((0., 0., 1.))
+    ]
+    cfg.link.rho = [
+        cfg.quad.num * np.vstack((
+            1. * np.cos(i*2*np.pi/cfg.quad.num),
+            1. * np.sin(i*2*np.pi/cfg.quad.num),
+            0
+        )) - cfg.load.cg for i in range(cfg.quad.num)
+    ]
+
 
 
 class OrnsteinUhlenbeckNoise:
@@ -331,10 +381,10 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(M_set[i])
 
     def step(self, action):
-        des_force_set = 3*[90]
-        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
+        # des_force_set = 3*[90]
+        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
 
-        # des_attitude_set, des_force_set = self.reshape_action(action)
+        des_attitude_set, des_force_set = self.reshape_action(action)
         *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_ang_rate, \
             quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
@@ -371,7 +421,7 @@ class IntergratedDynamics(BaseEnv):
         }
         return obs, reward, done, info
 
-    def logger_callback(self, i, t, y, t_hist, ode_hist):
+    def logger_callback(self, i, t, y, *args):
         return dict(time=t, moment=self.M)
 
     def reshape_action(self, action):
@@ -625,6 +675,7 @@ def main(path_base, env_params):
                 if done:
                     break
             train_logger.close()
+            env.logger.close()
 
             x = env.reset(random_init=False)
             eval_logger = logging.Logger(
@@ -681,6 +732,7 @@ def main(path_base, env_params):
                     agent.train()
                 if done:
                     break
+    env.close()
     cost_his = np.array(cost_his)
     fig, ax = plt.subplots(nrows=1, ncols=1)
     ax.plot(cost_his[:,0], cost_his[:,1], "*")
@@ -724,7 +776,6 @@ def make_figure(path, epi_num, env_params):
     error = data['error']
     moment_test = data_test['moment']
     time_test = data_test['time']
-    breakpoint()
 
     pos_ylabel = ["X [m]", "Y [m]", "Height [m]"]
     make_figure_3col(
@@ -1010,10 +1061,10 @@ if __name__ == "__main__":
     cg_bias = np.vstack((0.0, 0.0, 1.))
     quad_num = 3
     env_params = {
-        'epi_num': 1,
-        'epi_show': 1,
-        'time_step': 0.1,
-        'max_t': 1.,
+        'epi_num': 5000,
+        'epi_show': 500,
+        'time_step': 0.2,
+        'max_t': 3.,
         'load_mass': 10.,
         'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
         'load_rot_mat_init': rot.angle2dcm(0, np.pi/6, np.pi/6).T,
@@ -1037,7 +1088,7 @@ if __name__ == "__main__":
         'unc_max': 0.1,
         'anchor_radius': anchor_radius,
         'cg_bias': cg_bias,
-        'animation': False,
+        'animation': True,
     }
 
     main(path_base, env_params)

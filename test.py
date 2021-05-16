@@ -15,7 +15,7 @@ import fym.logging as logging
 
 class Test(BaseEnv):
     def __init__(self, a, b):
-        super().__init__()
+        super().__init__(dt=0.1, max_t=5, solver="rk4")
         #self.pos = BaseSystem(np.array([1, 2]))
         #self.vel = BaseSystem(np.array([0, 3]))
         self.pos = BaseSystem(np.vstack((1, 2)))
@@ -40,6 +40,9 @@ class Test(BaseEnv):
         }
         return done, info
 
+    def logger_callback(self, i, t, y, *args):
+        return dict(time=t, pos=self.pos.state)
+
 class ActorNet(nn.Module):
     def __init__(self):
         super(ActorNet, self).__init__()
@@ -58,20 +61,23 @@ class ActorNet(nn.Module):
         return x4
 
 def main():
-    memory = deque()
-    x = np.array([1, 2, 3])
-    temp = np.array([4, 5])
-    item = (x, temp)
-    actor = ActorNet()
-    for i in range(10):
-        memory.append(item)
-    x = np.vstack((1, 2, 3))
-    state, action = zip(*memory)
-    y = actor(torch.FloatTensor(x))
+    # memory = deque()
+    # x = np.array([1, 2, 3])
+    # temp = np.array([4, 5])
+    # item = (x, temp)
+    # actor = ActorNet()
+    # for i in range(10):
+    #     memory.append(item)
+    # x = np.vstack((1, 2, 3))
+    # state, action = zip(*memory)
+    # y = actor(torch.FloatTensor(x))
     env = Test(1, 2)
+    env.logger = logging.Logger("temp.h5")
     env.reset()
     done, info = env.step()
-    print('debug')
+    env.close()
+    data = logging.load("temp.h5")
+    breakpoint()
 
 def test():
     fig = plt.figure()
@@ -82,4 +88,4 @@ def test():
 
 
 if __name__ == "__main__":
-    test()
+    main()

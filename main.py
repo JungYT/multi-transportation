@@ -6,7 +6,6 @@ which means transformation matrix from body to ref.
 """
 import numpy as np
 import random
-import os
 from types import SimpleNamespace as SN
 from pathlib import Path
 
@@ -23,6 +22,8 @@ import fym.core as core
 import fym.logging as logging
 from fym.utils import rot
 from celluloid import Camera
+from utils import OrnsteinUhlenbeckNoise, softupdate, \
+    hardupdate, hat, make_figure, snap_ani
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -33,12 +34,12 @@ torch.cuda.manual_seed_all(0)
 cfg = SN()
 
 def load_config():
-    cfg.dt = 0.1
-    cfg.max_t = 1.
-    cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
     cfg.animation = True
     cfg.epi_train = 1
     cfg.epi_eval = 1
+    cfg.dt = 0.1
+    cfg.max_t = 1.
+    cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
     cfg.collision = 0.5
 
     cfg.controller = SN()
@@ -61,7 +62,7 @@ def load_config():
 
     cfg.link = SN()
     cfg.link.len = cfg.quad.num * [3.]
-    cfg.link.direction = cfg.quad.num * [
+    cfg.link.dir = cfg.quad.num * [
         np.vstack((0., 0., 1.))
     ]
     cfg.link.rho = [
@@ -73,128 +74,82 @@ def load_config():
     ]
 
 
-
-class OrnsteinUhlenbeckNoise:
-    def __init__(self, x0=None):
-        self.rho = 0.15
-        self.mu = 0
-        self.sigma = 0.2
-        self.dt = 0.1
-        self.x0 = x0
-        self.size = 9
-        self.reset()
-
-    def reset(self):
-        self.x = self.x0 if self.x0 is not None else np.zeros(self.size)
-
-    def get_noise(self):
-        x = (
-            self.x
-            + self.rho * (self.mu-self.x) * self.dt
-            + np.sqrt(self.dt) * self.sigma * np.random.normal(size=self.size)
-        )
-        self.x = x
-        return x
-
-def softupdate(target, behavior, softupdate_const):
-    for targetParam, behaviorParam in zip(target.parameters(), behavior.parameters()):
-        targetParam.data.copy_(
-            targetParam.data*(1.0-softupdate_const)\
-            + behaviorParam.data*softupdate_const
-        )
-
-def hardupdate(target, behavior):
-    for targetParam, behaviorParam in zip(target.parameters(), behavior.parameters()):
-        targetParam.data.copy_(behaviorParam.data)
-
-def hat(v):
-    v1, v2, v3 = v.squeeze()
-    return np.array([
-        [0, -v3, v2],
-        [v3, 0, -v1],
-        [-v2, v1, 0]
-    ])
-
-def wrap(angle):
-    return (angle+np.pi) % (2*np.pi) - np.pi
-
-
 class Load(BaseEnv):
-    def __init__(self, mass, pos_init, rot_mat_init):
+    def __init__(self, mass, pos_init, dcm_init):
         super().__init__()
         self.pos = BaseSystem(pos_init)
         self.vel = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
-        self.rot_mat = BaseSystem(rot_mat_init)
-        self.ang_rate = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
+        self.dcm = BaseSystem(dcm_init)
+        self.omega = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
         self.mass = mass
         self.J = np.diag([0.2, 0.2, 0.2])
 
     def set_dot(self, load_acc, ang_acc):
         self.pos.dot = self.vel.state
         self.vel.dot = load_acc
-        self.ang_rate.dot = ang_acc
-        R = self.rot_mat.state
-        self.rot_mat.dot = R.dot(hat(self.ang_rate.state))
+        self.omega.dot = ang_acc
+        R = self.dcm.state
+        self.dcm.dot = R.dot(hat(self.omega.state))
 
 class Link(BaseEnv):
     def __init__(self, link_init, length, rho):
         super().__init__()
         self.link = BaseSystem(link_init)
-        self.ang_rate = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
+        self.omega = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
         self.len = length
         self.rho = rho
 
     def set_dot(self, ang_acc):
-        w = self.ang_rate.state
+        w = self.omega.state
         q = self.link.state
         self.link.dot = (hat(w)).dot(q)
-        self.ang_rate.dot = ang_acc
+        self.omega.dot = ang_acc
 
 class Quadrotor(BaseEnv):
-    def __init__(self, rot_mat_init):
+    def __init__(self, dcm_init):
         super().__init__()
-        self.rot_mat = BaseSystem(rot_mat_init)
-        self.ang_rate = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
+        self.dcm = BaseSystem(dcm_init)
+        self.omega = BaseSystem(np.vstack((0.0, 0.0, 0.0)))
         self.J = np.diag([0.0820, 0.0845, 0.1377])
         self.mass = 4.34
 
     def set_dot(self, M):
-        R = self.rot_mat.state
-        Omega = self.ang_rate.state
-        self.rot_mat.dot = R.dot(hat(Omega))
-        self.ang_rate.dot = np.linalg.inv(self.J).dot(
+        R = self.dcm.state
+        Omega = self.omega.state
+        self.dcm.dot = R.dot(hat(Omega))
+        self.omega.dot = np.linalg.inv(self.J).dot(
             M - (hat(Omega)).dot(self.J.dot(Omega))
         )
 
 class IntergratedDynamics(BaseEnv):
-    def __init__(self, env_params):
-        super().__init__(dt=env_params['time_step'], max_t=env_params['max_t'], solver="odeint")
-        self.quad_num = env_params['quad_num']
+    def __init__(self):
+        super().__init__(dt=cfg.dt, max_t=cfg.max_t, solver="odeint")
+        self.quad_num = cfg.quad.num
         self.load = Load(
-            env_params['load_mass'],
-            env_params['load_pos_init'],
-            env_params['load_rot_mat_init']
+            cfg.load.mass,
+            cfg.load.pos,
+            cfg.load.dcm
         )
         self.links = core.Sequential(
             **{f"link{i:02d}": Link(
-            env_params['link_init'][i],
-            env_params['link_len'][i],
-            env_params['link_rho'][i]) for i in range(self.quad_num)}
+            cfg.link.dir[i],
+            cfg.link.len[i],
+            cfg.link.rho[i]) for i in range(self.quad_num)}
         )
         self.quads = core.Sequential(
             **{f"quad{i:02d}": Quadrotor(
-            env_params['quad_rot_mat_init'][i]
+            cfg.quad.dcm[i]
             ) for i in range(self.quad_num)}
         )
-        self.collision_criteria = env_params['collision_criteria']
+        self.collision_criteria = cfg.collision
         self.g = 9.81
         self.e3 = np.vstack((0.0, 0.0, 1.0))
-        self.K_e = env_params['K_e']
-        self.K_s = env_params['K_s']
-        self.chatter_bound = env_params['chatter_bound']
-        self.unc_max = env_params['unc_max']
+        self.K_e = cfg.controller.K_e
+        self.K_s = cfg.controller.K_s
+        self.chatter_bound = cfg.controller.chattering
+        self.unc_max = cfg.controller.unc_max
         self.M = deque(maxlen=self.quad_num)
-        self.max_t = env_params['max_t']
+        self.max_t = cfg.max_t
         self.S1_set = deque(maxlen=self.quad_num)
         self.S2_set = deque(maxlen=self.quad_num)
         self.S3_set = deque(maxlen=self.quad_num)
@@ -235,7 +190,7 @@ class IntergratedDynamics(BaseEnv):
                     high=0.5
                 )
             ))
-            self.load.rot_mat.state = rot.angle2dcm(
+            self.load.dcm.state = rot.angle2dcm(
                 np.random.uniform(
                     low=-np.pi/4,
                     high=np.pi/4
@@ -249,7 +204,7 @@ class IntergratedDynamics(BaseEnv):
                     high=np.pi/4
                 )
             ).T
-            self.load.ang_rate.state = np.vstack((
+            self.load.omega.state = np.vstack((
                 np.random.uniform(
                     low=-0.5,
                     high=0.5
@@ -268,7 +223,7 @@ class IntergratedDynamics(BaseEnv):
                 link.link.state = tmp[i]/np.linalg.norm(tmp[i])
 
             for link in self.links.systems:
-                link.ang_rate.state = np.vstack((
+                link.omega.state = np.vstack((
                     np.random.uniform(
                         low=-0.5,
                         high=0.5
@@ -283,7 +238,7 @@ class IntergratedDynamics(BaseEnv):
                     )
                 ))
             for quad in self.quads.systems:
-                quad.rot_mat.state = rot.angle2dcm(
+                quad.dcm.state = rot.angle2dcm(
                     np.random.uniform(
                         low=-np.pi/4,
                         high=np.pi/4
@@ -299,8 +254,8 @@ class IntergratedDynamics(BaseEnv):
 
     def set_dot(self, t, R_des, f_des):
         m_T = self.load.mass
-        R0 = self.load.rot_mat.state
-        Omega = self.load.ang_rate.state
+        R0 = self.load.dcm.state
+        Omega = self.load.omega.state
         Omega_hat = hat(Omega)
         Omega_hat2 = Omega_hat.dot(Omega_hat)
 
@@ -310,9 +265,9 @@ class IntergratedDynamics(BaseEnv):
             l = link.len
             rho = link.rho
             q = link.link.state
-            w = link.ang_rate.state
+            w = link.omega.state
             m = quad.mass
-            R = quad.rot_mat.state
+            R = quad.dcm.state
             u = -f_des[i] * R.dot(self.e3)
 
             m_T += m
@@ -371,7 +326,7 @@ class IntergratedDynamics(BaseEnv):
             q = link.link.state
             q_hat = hat(q)
             m = quad.mass
-            R = quad.rot_mat.state
+            R = quad.dcm.state
             u = -f_des[i] * R.dot(self.e3)
             R0_Omega2_rho = R0.dot(Omega_hat2.dot(rho))
             D = R0.dot(hat(rho).dot(load_ang_acc)) + self.g*self.e3 + u/m
@@ -386,10 +341,10 @@ class IntergratedDynamics(BaseEnv):
 
         des_attitude_set, des_force_set = self.reshape_action(action)
         *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
-        quad_pos, quad_vel, quad_ang, quad_ang_rate, \
-            quad_rot_mat, anchor_pos, collisions = self.compute_quad_state()
-        load_ang = np.vstack(rot.dcm2angle(self.load.rot_mat.state.T))[::-1]
-        done, time = self.terminate(collisions)
+        quad_pos, quad_vel, quad_ang, quad_omega, \
+            quad_dcm, anchor_pos, collisions = self.compute_quad_state()
+        load_ang = np.vstack(rot.dcm2angle(self.load.dcm.state.T))[::-1]
+        done, time = self.terminate(collisions, done)
         distance = [np.linalg.norm(quad_pos[i]-anchor_pos[i])
                     for i in range(self.quad_num)]
         obs = self.observe()
@@ -403,13 +358,13 @@ class IntergratedDynamics(BaseEnv):
             "load_pos": self.load.pos.state,
             "load_vel": self.load.vel.state,
             "load_ang": load_ang,
-            "load_ang_rate": self.load.ang_rate.state,
-            "load_rot_mat": self.load.rot_mat.state,
+            "load_omega": self.load.omega.state,
+            "load_dcm": self.load.dcm.state,
             "quad_pos": quad_pos,
             "quad_vel": quad_vel,
             "quad_ang": quad_ang,
-            "quad_ang_rate": quad_ang_rate,
-            "quad_rot_mat": quad_rot_mat,
+            "quad_omega": quad_omega,
+            "quad_dcm": quad_dcm,
             "moment": self.M,
             "distance": distance,
             "anchor_pos": anchor_pos,
@@ -434,16 +389,16 @@ class IntergratedDynamics(BaseEnv):
         load_pos = self.load.pos.state.reshape(-1,)
         load_vel = self.load.vel.state.reshape(-1,)
         load_attitude = np.array(
-            rot.dcm2angle(self.load.rot_mat.state.T)
+            rot.dcm2angle(self.load.dcm.state.T)
         )[::-1]
-        load_ang_rate = self.load.ang_rate.state.reshape(-1,)
-        load_state = [load_pos[2], load_vel[2], load_attitude, load_ang_rate]
+        load_omega = self.load.omega.state.reshape(-1,)
+        load_state = [load_pos[2], load_vel[2], load_attitude, load_omega]
         link_state = [
             rot.velocity2polar(link.link.state)[1:]
             for link in self.links.systems
-        ] + [link.ang_rate.state.reshape(-1,) for link in self.links.systems]
+        ] + [link.omega.state.reshape(-1,) for link in self.links.systems]
         quad_state = [
-            np.array(rot.dcm2angle(quad.rot_mat.state.T))[::-1][0:2]
+            np.array(rot.dcm2angle(quad.dcm.state.T))[::-1][0:2]
             for quad in self.quads.systems
         ]
         obs = np.hstack(load_state + link_state + quad_state)
@@ -451,49 +406,49 @@ class IntergratedDynamics(BaseEnv):
 
     def compute_quad_state(self):
         load_pos = self.load.pos.state
-        load_rot_mat = self.load.rot_mat.state
+        load_dcm = self.load.dcm.state
         load_vel = self.load.vel.state
-        load_ang_rate = self.load.ang_rate.state
-        load_ang_rate_hat = hat(load_ang_rate)
+        load_omega = self.load.omega.state
+        load_omega_hat = hat(load_omega)
 
         quad_pos = [
-            load_pos + load_rot_mat.dot(link.rho) - link.len*link.link.state
+            load_pos + load_dcm.dot(link.rho) - link.len*link.link.state
             for link in self.links.systems
         ]
         quad_vel = [
-            load_vel + load_rot_mat.dot(load_ang_rate_hat.dot(link.rho)) \
-            - link.len*hat(link.ang_rate.state).dot(link.link.state)
+            load_vel + load_dcm.dot(load_omega_hat.dot(link.rho)) \
+            - link.len*hat(link.omega.state).dot(link.link.state)
             for link in self.links.systems
         ]
         quad_ang = [
-            np.array(rot.dcm2angle(quad.rot_mat.state.T))[::-1]
+            np.array(rot.dcm2angle(quad.dcm.state.T))[::-1]
             for quad in self.quads.systems
         ]
-        quad_ang_rate = [quad.ang_rate.state for quad in self.quads.systems]
-        quad_rot_mat = [
-            quad.rot_mat.state for quad in self.quads.systems
+        quad_omega = [quad.omega.state for quad in self.quads.systems]
+        quad_dcm = [
+            quad.dcm.state for quad in self.quads.systems
         ]
-        anchor_pos = [load_pos + load_rot_mat.dot(link.rho) for link in self.links.systems]
+        anchor_pos = [load_pos + load_dcm.dot(link.rho) for link in self.links.systems]
         collisions = [np.linalg.norm(quad_pos[i]-quad_pos[i+1])
                       for i in range(self.quad_num-1)]
         collisions.append(np.linalg.norm(quad_pos[-1] - quad_pos[0]))
 
-        return quad_pos, quad_vel, quad_ang, quad_ang_rate,\
-            quad_rot_mat, anchor_pos, collisions
+        return quad_pos, quad_vel, quad_ang, quad_omega,\
+            quad_dcm, anchor_pos, collisions
 
     def control_attitude(self, des_attitude_set):
         M_set = []
         for i, quad in enumerate(self.quads.systems):
             quad_ang = np.vstack(
-                rot.dcm2angle(quad.rot_mat.state.T)[::-1]
+                rot.dcm2angle(quad.dcm.state.T)[::-1]
             )
             phi = quad_ang[0][0]
             theta = quad_ang[1][0]
-            ang_rate = quad.ang_rate.state
-            ang_rate_hat = hat(ang_rate)
-            wx = quad.ang_rate.state[0].item()
-            wy = quad.ang_rate.state[1].item()
-            wz = quad.ang_rate.state[2].item()
+            omega = quad.omega.state
+            omega_hat = hat(omega)
+            wx = quad.omega.state[0].item()
+            wy = quad.omega.state[1].item()
+            wz = quad.omega.state[2].item()
 
             L = np.array([
                 [1, np.sin(phi)*np.tan(theta), np.cos(phi)*np.tan(theta)],
@@ -512,22 +467,22 @@ class IntergratedDynamics(BaseEnv):
             ])
             b = np.vstack((wx, 0., 0.))
 
-            e2 = L.dot(quad.ang_rate.state)
+            e2 = L.dot(quad.omega.state)
             e1 = quad_ang - des_attitude_set[i]
             s = self.K_e*e1 + e2
             s_clip = np.clip(s/self.chatter_bound, -1, 1)
             M = (quad.J.dot(np.linalg.inv(L))).dot(
                 -self.K_e*e2 - b - L2.dot(e2) - s_clip*(self.unc_max+self.K_s)
-            ) + ang_rate_hat.dot(quad.J.dot(ang_rate))
+            ) + omega_hat.dot(quad.J.dot(omega))
 
             M_set.append(M)
             self.M.append(M)
         return M_set
 
-    def terminate(self, collisions):
+    def terminate(self, collisions, done):
         time = self.clock.get()
         load_posz = self.load.pos.state[2]
-        done = 1. if (load_posz > 0 or time > self.max_t or
+        done = 1. if (load_posz > 0 or done or
                       any(x < self.collision_criteria for x in collisions)) else 0.
         return done, time
 
@@ -650,17 +605,17 @@ class DDPG:
         softupdate(self.target_critic, self.behavior_critic, self.softupdate_const)
 
 
-def main(path_base, env_params):
-    env = IntergratedDynamics(env_params)
+def main():
+    env = IntergratedDynamics()
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []
-    for epi in tqdm(range(env_params["epi_num"])):
+    for epi in tqdm(range(cfg.epi_train)):
         x = env.reset()
         noise.reset()
-        if (epi+1) % env_params["epi_show"] == 0 or epi == 0:
+        if (epi+1) % cfg.epi_eval == 0 or epi == 0:
             train_logger = logging.Logger(
-                log_dir=os.path.join(path_base, 'train'),
+                log_dir=Path(cfg.dir, "train"),
                 file_name=f"data_{epi+1:05d}.h5"
             )
             while True:
@@ -679,26 +634,26 @@ def main(path_base, env_params):
 
             x = env.reset(random_init=False)
             eval_logger = logging.Logger(
-                log_dir=os.path.join(path_base, 'eval', f"epi_{epi+1:05d}"),
+                log_dir=Path(cfg.dir, f"eval/epi_{epi+1:05d}"),
                 file_name=f"data_{(epi+1):05d}.h5"
             )
-            if env_params['animation']:
+            if cfg.animation:
                 fig = plt.figure()# {{{
                 ax = fig.gca(projection='3d')
                 camera =Camera(fig)# }}}
                 while True:
                     u = agent.get_action(x)
                     xn, r, done, info = env.step(u)
-                    snap_ani(ax, info, env_params)
+                    snap_ani(ax, info, cfg)
                     camera.snap()
                     eval_logger.record(**info)
                     x = xn
                     if done:
                         break
                 ani = camera.animate(
-                    interval=1000*env_params['time_step'], blit=True
+                    interval=1000*cfg.dt, blit=True
                 )
-                path_ani = os.path.join(path_base, f"ani_{(epi+1):05d}.mp4")
+                path_ani = Path(cfg.dir, f"ani_{(epi+1):05d}.mp4")
                 ani.save(path_ani)
             else:
                 while True:
@@ -712,15 +667,15 @@ def main(path_base, env_params):
             plt.close('all')
             env.logger.close()
             cost = make_figure(
-                os.path.join(path_base, 'eval', f'epi_{epi+1:05d}'),
+                Path(cfg.dir, f'eval/epi_{epi+1:05d}'),
                 (epi+1),
-                env_params
+                cfg
             )
             cost_his.append([epi+1, cost])
             torch.save({
                 'target_actor': agent.target_actor.state_dict(),
                 'target_critic': agent.target_critic.state_dict()
-            }, os.path.join(path_base, 'eval', f"parameters_{epi+1:05d}.pt"))
+            }, Path(cfg.dir, f"eval/parameters_{epi+1:05d}.pt"))
         else:
             while True:
                 u = agent.get_action(x) + noise.get_noise()
@@ -741,355 +696,20 @@ def main(path_base, env_params):
     ax.set_xlabel("Number of trained episode")
     ax.set_ylabel("Cost")
     fig.savefig(
-        os.path.join(path_base, f"Cost_{env_params['epi_num']:d}"),
+        Path(cfg.dir, f"Cost_{cfg.epi_train:d}"),
         bbox_inches='tight'
     )
     plt.close('all')
     env.close()
     logger = logging.Logger(
-        log_dir=path_base, file_name='params_and_cost.h5'
+        log_dir=cfg.dir, file_name='config_ang_cost.h5'
     )
-    logger.set_info(**env_params)
+    logger.set_info(cfg=cfg)
     logger.record(cost_his=cost_his)
     logger.close()
 
-def make_figure(path, epi_num, env_params):
-    data = logging.load(os.path.join(path, f"data_{epi_num:05d}.h5"))# {{{
-    data_test = logging.load('test.h5')
-
-    quad_num = env_params['quad_num']
-    time = data['time']
-    load_pos = data['load_pos']
-    load_vel = data['load_vel']
-    load_ang = np.unwrap(data['load_ang'])*180/np.pi
-    load_ang_rate = np.unwrap(data['load_ang_rate'])*180/np.pi
-    quad_pos = data['quad_pos']
-    quad_vel = data['quad_vel']
-    quad_ang = np.unwrap(data['quad_ang'])*180/np.pi
-    quad_ang_rate = np.unwrap(data['quad_ang_rate'])*180/np.pi
-    moment = data['moment']
-    distance = data['distance']
-    collisions = data['collisions']
-    reward = data['reward']
-    des_attitude = np.unwrap(data['des_attitude'].squeeze())*180/np.pi
-    des_force = data['des_force']
-    error = data['error']
-    moment_test = data_test['moment']
-    time_test = data_test['time']
-
-    pos_ylabel = ["X [m]", "Y [m]", "Height [m]"]
-    make_figure_3col(
-        time,
-        load_pos*np.vstack((1, 1, -1)),
-        "Position of payload",
-        "time [s]",
-        pos_ylabel,
-        f"load_pos_{epi_num:05d}",
-        path
-    )
-    vel_ylabel = ["$V_x$ [m/s]", "$V_y$ [m/a]", "$V_z$ [m/s]"]
-    make_figure_3col(
-        time,
-        load_vel,
-        "Velocity of payload",
-        "time [s]",
-        vel_ylabel,
-        f"load_vel_{epi_num:05d}",
-        path
-    )
-    ang_ylabel = ["$\phi$ [deg]", "$\\theta$ [deg]", "$\psi$ [deg]"]
-    make_figure_3col(
-        time,
-        load_ang,
-        "Euler angle of payload",
-        "time [s]",
-        ang_ylabel,
-        f"load_ang_{epi_num:05d}",
-        path
-    )
-    ang_rate_ylabel = [
-        "$\dot{\phi}$ [deg/s]",
-        "$\dot{\\theta}$ [deg/s]",
-        "$\dot{\psi}$ [deg/s]"
-    ]
-    make_figure_3col(
-        time,
-        load_ang_rate,
-        "Euler angle rate of payload",
-        "time [s]",
-        ang_rate_ylabel,
-        f"load_ang_rate_{epi_num:05d}",
-        path
-    )
-
-    [make_figure_3col(
-        time,
-        quad_pos[:,i,:,:]*np.vstack((1, 1, -1)),
-        f"Position of quadrotor {i}",
-        "time [s]",
-        pos_ylabel,
-        f"quad_pos_{i}_{epi_num:05d}",
-        path
-    ) for i in range(quad_num)]
-
-    [make_figure_3col(
-        time,
-        quad_vel[:,i,:,:],
-        f"Velocity of quadrotor {i}",
-        "time [s]",
-        vel_ylabel,
-        f"quad_vel_{i}_{epi_num:05d}",
-        path
-    ) for i in range(quad_num)]
-
-    [make_figure_compare(
-        time,
-        quad_ang[:,i,:],
-        des_attitude[:,i,:],
-        ['Quad.', 'Des.'],
-        f"Euler angle of quadrotor {i}",
-        "time [s]",
-        ang_ylabel,
-        f"quad_ang_{i}_{epi_num:05d}",
-        path
-    ) for i in range(quad_num)]
-
-    [make_figure_3col(
-        time,
-        quad_ang_rate[:,i,:],
-        f"Euler angle rate of quadrotor {i}",
-        "time [s]",
-        ang_rate_ylabel,
-        f"quad_ang_rate_{i}_{epi_num:05d}",
-        path
-    ) for i in range(quad_num)]
-
-    moment_ylabel = ["$M_x$ [Nm]", "$M_y$ [Nm]", "$M_z$ [Nm]"]
-    [make_figure_3col(
-        time,
-        moment[:,i,:],
-        f"Moment of quadrotor {i}",
-        "time [s]",
-        moment_ylabel,
-        f"quad_moment_{i}_{epi_num:05d}",
-        path
-    ) for i in range(quad_num)]
-
-    moment_ylabel = ["$M_x$ [Nm]", "$M_y$ [Nm]", "$M_z$ [Nm]"]
-    [make_figure_3col(
-        time_test,
-        moment_test[:,i,:],
-        f"Moment of quadrotor {i}",
-        "time [s]",
-        moment_ylabel,
-        f"test_{i}_{epi_num:05d}",
-        path
-    ) for i in range(quad_num)]
-
-    distance_ylabel = ["quad0 [m]", "quad1 [m]", "quad2 [m]"]
-    link_len = env_params['link_len']
-    fig, ax = plt.subplots(nrows=3, ncols=1)
-    ax[0].plot(time, distance[:,0])
-    ax[1].plot(time, distance[:,1])
-    ax[2].plot(time, distance[:,2])
-    ax[0].set_title("distance from quad to anchor")
-    ax[0].set_ylabel(distance_ylabel[0])
-    ax[1].set_ylabel(distance_ylabel[1])
-    ax[2].set_ylabel(distance_ylabel[2])
-    ax[2].set_xlabel("time [s]")
-    [ax[i].grid(True) for i in range(3)]
-    [ax[i].set_ylim(link_len[i]-0.5, link_len[i]+0.5) for i in range(3)]
-    fig.align_ylabels(ax)
-    fig.savefig(
-        os.path.join(path, f"distance_link_to_anchor_{epi_num:05d}"),
-        bbox_inches='tight'
-    )
-
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    line1, = ax.plot(time, collisions[:,0], 'r')
-    line2, = ax.plot(time, collisions[:,1], 'b')
-    line3, = ax.plot(time, collisions[:,2], 'k')
-    ax.legend(handles=(line1, line2, line3),
-              labels=('quad0-quad1', 'quad1-quad2', 'quad2-quad0'))
-    ax.set_title("Distance between quadrotors")
-    ax.set_ylabel('distance [m]')
-    ax.set_xlabel("time [s]")
-    ax.grid(True)
-    fig.savefig(
-        os.path.join(path, f"distance_btw_quads_{epi_num:05d}"),
-        bbox_inches='tight'
-    )
-
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(time, reward, 'r')
-    ax.set_title("Reward")
-    ax.set_ylabel('reward')
-    ax.set_xlabel("time [s]")
-    ax.grid(True)
-    fig.savefig(
-        os.path.join(path, f"reward_{epi_num:05d}"),
-        bbox_inches='tight'
-    )
-
-    force_ylabel = ["quad0 [N]", "quad1 [N]", "quad2 [N]"]
-    fig, ax = plt.subplots(nrows=3, ncols=1)
-    ax[0].plot(time, des_force[:,0])
-    ax[1].plot(time, des_force[:,1])
-    ax[2].plot(time, des_force[:,2])
-    ax[0].set_title("Desired net force")
-    ax[0].set_ylabel(force_ylabel[0])
-    ax[1].set_ylabel(force_ylabel[1])
-    ax[2].set_ylabel(force_ylabel[2])
-    ax[2].set_xlabel("time [s]")
-    [ax[i].grid(True) for i in range(3)]
-    fig.align_ylabels(ax)
-    fig.savefig(
-        os.path.join(path, f"des_net_force_{epi_num:05d}"),
-        bbox_inches='tight'
-    )
-
-    plt.close('all')
-
-    G = 0
-    for r in reward[::-1]:
-        G = r.item() + 0.999*G
-    return G
-
-def make_figure_3col(x, y, title, xlabel, ylabel,
-                     file_name, path):
-    fig, ax = plt.subplots(nrows=3, ncols=1)# {{{
-    ax[0].plot(x, y[:,0])
-    ax[1].plot(x, y[:,1])
-    ax[2].plot(x, y[:,2])
-    ax[0].set_title(title)
-    ax[0].set_ylabel(ylabel[0])
-    ax[1].set_ylabel(ylabel[1])
-    ax[2].set_ylabel(ylabel[2])
-    ax[2].set_xlabel(xlabel)
-    [ax[i].grid(True) for i in range(3)]
-    fig.align_ylabels(ax)
-    fig.savefig(
-        os.path.join(path, file_name),
-        bbox_inches='tight'
-    )
-    plt.close('all')# }}}
-
-def make_figure_compare(x, y1, y2, legend, title, xlabel, ylabel,
-                     file_name, path):
-    fig, ax = plt.subplots(nrows=3, ncols=1)# {{{
-    line1, = ax[0].plot(x, y1[:,0], 'r')
-    line2, = ax[0].plot(x, y2[:,0], 'b--')
-    ax[0].legend(
-        handles=(line1, line2),
-        labels=(legend[0], legend[1])
-    )
-    ax[1].plot(x, y1[:,1], 'r', x, y2[:,1], 'b--')
-    ax[2].plot(x, y1[:,2], 'r', x, y2[:,2], 'b--')
-    ax[0].set_title(title)
-    ax[0].set_ylabel(ylabel[0])
-    ax[1].set_ylabel(ylabel[1])
-    ax[2].set_ylabel(ylabel[2])
-    ax[2].set_xlabel(xlabel)
-    [ax[i].grid(True) for i in range(3)]
-    fig.align_ylabels(ax)
-    fig.savefig(
-        os.path.join(path, file_name),
-        bbox_inches='tight'
-    )
-    plt.close('all')# }}}
-
-def snap_ani(ax, info, params):
-    load_pos = info['load_pos']# {{{
-    quad_pos = info['quad_pos']
-    quad_num = params['quad_num']
-    anchor_pos = info["anchor_pos"]
-    # link
-    [
-        ax.plot3D(
-            [anchor_pos[i][0][0], quad_pos[i][0][0]],
-            [anchor_pos[i][1][0], quad_pos[i][1][0]],
-            [-anchor_pos[i][2][0], -quad_pos[i][2][0]],
-            alpha=0.6, c="k"
-        ) for i in range(quad_num)
-    ]
-    # rho
-    [
-        ax.plot3D(
-            [anchor_pos[i][0][0], load_pos[0][0]],
-            [anchor_pos[i][1][0], load_pos[1][0]],
-            [-anchor_pos[i][2][0], -load_pos[2][0]],
-            alpha=0.6, c="k"
-        ) for i in range(quad_num)
-    ]
-    # load shape
-    [
-        ax.plot3D(
-            [anchor_pos[i%quad_num][0][0], anchor_pos[(i+1)%quad_num][0][0]],
-            [anchor_pos[i%quad_num][1][0], anchor_pos[(i+1)%quad_num][1][0]],
-            [-anchor_pos[i%quad_num][2][0], -anchor_pos[(i+1)%quad_num][2][0]],
-            alpha=0.6, c="k"
-        ) for i in range(quad_num)
-    ]
-    # quadrotors
-    [
-        ax.plot3D(
-            quad_pos[i][0][0],
-            quad_pos[i][1][0],
-            -quad_pos[i][2][0],
-            alpha=0.6, c="r", marker="X"
-        ) for i in range(quad_num)
-    ]
-
-    # axis limit
-    ax.set_xlim3d(-30, 30)
-    ax.set_ylim3d(-30, 30)
-    ax.set_zlim3d(-5, 55)# }}}
 
 if __name__ == "__main__":
-    path_base = os.path.join(
-        'log', datetime.today().strftime('%Y%m%d-%H%M%S')
-    )
-    """
-    rot.angle2dcm converts angle to transformation matrix
-    which transforms from ref. to body coordinate.
-    In simulation, rotation matrix follows robotic convention,
-    which means transformation matrix from body to ref.
-    """
-    # quad_rot_mat_init = rot.angle2dcm(0., np.pi/4, np.pi/6).T # z-y-x order
-    # quad_rot_mat_init = rot.angle2dcm(0, 0, np.pi/6).T # z-y-x order
-    anchor_radius = 1.
-    cg_bias = np.vstack((0.0, 0.0, 1.))
-    quad_num = 3
-    env_params = {
-        'epi_num': 5000,
-        'epi_show': 500,
-        'time_step': 0.2,
-        'max_t': 3.,
-        'load_mass': 10.,
-        'load_pos_init': np.vstack((0.0, 0.0, -5.0)),
-        'load_rot_mat_init': rot.angle2dcm(0, np.pi/6, np.pi/6).T,
-        'quad_num': 3,
-        'quad_rot_mat_init': quad_num * [
-            rot.angle2dcm(-np.pi/6, np.pi/6, np.pi/6).T
-        ],
-        'link_len': quad_num*[3.],
-        'link_init': quad_num*[np.vstack((0.0, 0.0, 1.0))],
-        'link_rho': [
-            3*np.vstack((
-                anchor_radius * np.cos(i*2*np.pi/quad_num),
-                anchor_radius * np.sin(i*2*np.pi/quad_num),
-                0
-            )) - cg_bias for i in range(quad_num)
-        ],
-        'collision_criteria': 0.5,
-        'K_e': 20.,
-        'K_s': 80.,
-        'chatter_bound': 0.5,
-        'unc_max': 0.1,
-        'anchor_radius': anchor_radius,
-        'cg_bias': cg_bias,
-        'animation': True,
-    }
-
-    main(path_base, env_params)
+    load_config()
+    main()
 

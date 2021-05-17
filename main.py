@@ -376,7 +376,7 @@ class IntergratedDynamics(BaseEnv):
         }
         return obs, reward, done, info
 
-    def logger_callback(self, i, t, y, *args):
+    def logger_callback(self, t, y, i, t_hist, ode_hist):
         return dict(time=t, moment=self.M)
 
     def reshape_action(self, action):

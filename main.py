@@ -37,7 +37,8 @@ def load_config():
     cfg.animation = True
     cfg.epi_train = 1
     cfg.epi_eval = 1
-    cfg.dt = 0.1
+    cfg.dt = 0.01
+    cfg.ode_step = 10
     cfg.max_t = 1.
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
     cfg.collision = 0.5
@@ -123,7 +124,7 @@ class Quadrotor(BaseEnv):
 
 class IntergratedDynamics(BaseEnv):
     def __init__(self):
-        super().__init__(dt=cfg.dt, max_t=cfg.max_t, solver="odeint")
+        super().__init__(dt=cfg.dt, max_t=cfg.max_t, solver="odeint", ode_step_len=cfg.ode_step)
         self.quad_num = cfg.quad.num
         self.load = Load(
             cfg.load.mass,
@@ -157,7 +158,6 @@ class IntergratedDynamics(BaseEnv):
         self.S5_set = deque(maxlen=self.quad_num)
         self.S6_set = deque(maxlen=self.quad_num)
         self.S7_set = deque(maxlen=self.quad_num)
-        self.logger = logging.Logger('test.h5')
 
     def reset(self, random_init=True):
         super().reset()
@@ -336,10 +336,10 @@ class IntergratedDynamics(BaseEnv):
             quad.set_dot(M_set[i])
 
     def step(self, action):
-        # des_force_set = 3*[90]
-        # des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
+        des_force_set = 3*[90]
+        des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
 
-        des_attitude_set, des_force_set = self.reshape_action(action)
+        # des_attitude_set, des_force_set = self.reshape_action(action)
         *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_omega, \
             quad_dcm, anchor_pos, collisions = self.compute_quad_state()
@@ -376,8 +376,10 @@ class IntergratedDynamics(BaseEnv):
         }
         return obs, reward, done, info
 
-    def logger_callback(self, t, y, i, t_hist, ode_hist):
-        return dict(time=t, moment=self.M)
+    def logger_callback(self, t, y, i, t_hist, ode_hist, R_des, f_des):
+        M_set = self.control_attitude(R_des)
+        states = self.observe_dict(y)
+        return dict(time=t, moment=M_set, **states)
 
     def reshape_action(self, action):
         des_attitude_set = [np.vstack(np.append(action[2*i:2*(i+1)], 0.))
@@ -607,6 +609,7 @@ class DDPG:
 
 def main():
     env = IntergratedDynamics()
+    env.logger = logging.Logger('test.h5')
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []

@@ -37,7 +37,7 @@ def load_config():
     cfg.animation = True
     cfg.epi_train = 1
     cfg.epi_eval = 1
-    cfg.dt = 0.01
+    cfg.dt = 0.1
     cfg.ode_step = 10
     cfg.max_t = 1.
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
@@ -340,7 +340,7 @@ class IntergratedDynamics(BaseEnv):
         des_attitude_set = 3*[np.vstack((0.0, 0.0, 0.0))]
 
         # des_attitude_set, des_force_set = self.reshape_action(action)
-        *_, done = self.update(R_des = des_attitude_set, f_des=des_force_set)
+        *_, done = self.update(attitude_des = des_attitude_set, f_des=des_force_set)
         quad_pos, quad_vel, quad_ang, quad_omega, \
             quad_dcm, anchor_pos, collisions = self.compute_quad_state()
         load_ang = np.vstack(rot.dcm2angle(self.load.dcm.state.T))[::-1]
@@ -376,10 +376,57 @@ class IntergratedDynamics(BaseEnv):
         }
         return obs, reward, done, info
 
-    def logger_callback(self, t, y, i, t_hist, ode_hist, R_des, f_des):
-        M_set = self.control_attitude(R_des)
+    def logger_callback(self, t, y, i, t_hist, ode_hist, attitude_des, f_des):
+        M_set = []
         states = self.observe_dict(y)
+        for i in range(3):
+            M = self.control(
+                attitude_des[i], states['quads'][f'quad{i:02d}']['dcm'], states['quads'][f'quad{i:02d}']['omega']
+            )
+            M_set.append(M)
+        # breakpoint()
+
         return dict(time=t, moment=M_set, **states)
+
+    def control(self, des_attitude, quad_dcm, quad_omega):
+        quad_ang = np.vstack(
+            rot.dcm2angle(quad_dcm.T)[::-1]
+        )
+        phi = quad_ang[0][0]
+        theta = quad_ang[1][0]
+        omega = quad_omega
+        omega_hat = hat(omega)
+        wx = quad_omega[0].item()
+        wy = quad_omega[1].item()
+        wz = quad_omega[2].item()
+
+        L = np.array([
+            [1, np.sin(phi)*np.tan(theta), np.cos(phi)*np.tan(theta)],
+            [0, np.cos(phi), -np.sin(phi)],
+            [0, np.sin(phi)/np.cos(theta), np.cos(phi)/np.cos(theta)]
+        ])
+        L2 = np.array([
+            [wy*np.cos(phi)*np.tan(theta) - wz*np.sin(phi)*np.tan(theta),
+            wy*np.sin(phi)/(np.cos(theta))**2 + wz*np.cos(phi)/(np.cos(theta))**2,
+            0],
+            [-wy*np.sin(phi)-wz*np.cos(phi), 0, 0],
+            [wy*np.cos(phi)/np.cos(theta) - wz*np.sin(phi)*np.cos(theta),
+            wy*np.sin(phi)*np.tan(theta)/np.cos(theta) - \
+            wz*np.cos(phi)*np.tan(theta)/np.cos(theta),
+            0]
+        ])
+        b = np.vstack((wx, 0., 0.))
+        J = np.diag([0.0820, 0.0845, 0.1377])
+
+        e2 = L.dot(omega)
+        e1 = quad_ang - des_attitude
+        s = 20.*e1 + e2
+        s_clip = np.clip(s/0.5, -1, 1)
+        M = (J.dot(np.linalg.inv(L))).dot(
+            -20.*e2 - b - L2.dot(e2) - s_clip*(0.1+80.)
+        ) + omega_hat.dot(J.dot(omega))
+
+        return M
 
     def reshape_action(self, action):
         des_attitude_set = [np.vstack(np.append(action[2*i:2*(i+1)], 0.))
@@ -609,7 +656,6 @@ class DDPG:
 
 def main():
     env = IntergratedDynamics()
-    env.logger = logging.Logger('test.h5')
     agent = DDPG()
     noise = OrnsteinUhlenbeckNoise()
     cost_his = []
@@ -633,8 +679,8 @@ def main():
                 if done:
                     break
             train_logger.close()
-            env.logger.close()
 
+            env.logger = logging.Logger('test.h5')
             x = env.reset(random_init=False)
             eval_logger = logging.Logger(
                 log_dir=Path(cfg.dir, f"eval/epi_{epi+1:05d}"),

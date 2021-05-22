@@ -49,47 +49,6 @@ def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi
 
 def make_figure(path, epi_num, cfg):
-    des = np.vstack((0.0, 0.0, 0.0))
-    def control(des_attitude_set, quad_dcm, quad_omega):
-        quad_ang = np.vstack(
-            rot.dcm2angle(quad_dcm.T)[::-1]
-        )
-        phi = quad_ang[0][0]
-        theta = quad_ang[1][0]
-        omega = quad_omega
-        omega_hat = hat(omega)
-        wx = quad_omega[0].item()
-        wy = quad_omega[1].item()
-        wz = quad_omega[2].item()
-
-        L = np.array([
-            [1, np.sin(phi)*np.tan(theta), np.cos(phi)*np.tan(theta)],
-            [0, np.cos(phi), -np.sin(phi)],
-            [0, np.sin(phi)/np.cos(theta), np.cos(phi)/np.cos(theta)]
-        ])
-        L2 = np.array([
-            [wy*np.cos(phi)*np.tan(theta) - wz*np.sin(phi)*np.tan(theta),
-            wy*np.sin(phi)/(np.cos(theta))**2 + wz*np.cos(phi)/(np.cos(theta))**2,
-            0],
-            [-wy*np.sin(phi)-wz*np.cos(phi), 0, 0],
-            [wy*np.cos(phi)/np.cos(theta) - wz*np.sin(phi)*np.cos(theta),
-            wy*np.sin(phi)*np.tan(theta)/np.cos(theta) - \
-            wz*np.cos(phi)*np.tan(theta)/np.cos(theta),
-            0]
-        ])
-        b = np.vstack((wx, 0., 0.))
-        J = np.diag([0.0820, 0.0845, 0.1377])
-
-        e2 = L.dot(omega)
-        e1 = quad_ang - des_attitude_set
-        s = 20.*e1 + e2
-        s_clip = np.clip(s/0.5, -1, 1)
-        M = (J.dot(np.linalg.inv(L))).dot(
-            -20.*e2 - b - L2.dot(e2) - s_clip*(0.1+80.)
-        ) + omega_hat.dot(J.dot(omega))
-
-        return M
-
     data = logging.load(
         Path(path, f"data_{epi_num:05d}.h5")
     )

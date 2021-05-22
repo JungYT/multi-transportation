@@ -41,7 +41,6 @@ def load_config():
     cfg.ode_step = 10
     cfg.max_t = 1.
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
-    cfg.collision = 0.5
 
     cfg.controller = SN()
     cfg.controller.K_e = 20.
@@ -60,6 +59,7 @@ def load_config():
     cfg.quad.dcm = cfg.quad.num * [
         rot.angle2dcm(-np.pi/6, np.pi/6, np.pi/6).T
     ]
+    cfg.quad.iscollision = 0.5
 
     cfg.link = SN()
     cfg.link.len = cfg.quad.num * [3.]

@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 from matplotlib import pyplot as plt
+import time
 
 from fym.core import BaseEnv, BaseSystem
 import fym.core as core
@@ -71,13 +72,36 @@ def main():
     # x = np.vstack((1, 2, 3))
     # state, action = zip(*memory)
     # y = actor(torch.FloatTensor(x))
-    env = Test(1, 2)
-    env.logger = logging.Logger("temp.h5")
-    env.reset()
-    done, info = env.step()
-    env.close()
-    data = logging.load("temp.h5")
-    breakpoint()
+    # env = Test(1, 2)
+    # env.logger = logging.Logger("temp.h5")
+    # env.reset()
+    # done, info = env.step()
+    # env.close()
+    # data = logging.load("temp.h5")
+    # breakpoint()
+
+    ite = 1
+    start1 = time.time()
+    for k in range(ite):
+        a1 = [i + 100*np.sqrt(2) for i in range(3)]
+        b1 = [i + 100*np.sqrt(2) for i in range(3)]
+        c1 = [i + 100*np.sqrt(2) for i in range(3)]
+    end1 = time.time()
+    start2 = time.time()
+    for k in range(ite):
+        a = []
+        b = []
+        c = []
+        for i in range(3):
+            a.append(i + 100*np.sqrt(2))
+            b.append(i + 100*np.sqrt(2))
+            c.append(i + 100*np.sqrt(2))
+    end2 = time.time()
+
+    print("time1: :", end1 - start1)
+    print("time2: :", end2 - start2)
+
+
 
 def test():
     fig = plt.figure()

@@ -14,7 +14,7 @@ import torch.optim as optim
 import fym.logging as logging
 from fym.utils import rot
 from dynamics import MultiQuadSlungLoad
-from utils import draw_plot
+from utils import draw_plot, Animator, split_int
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -22,13 +22,18 @@ random.seed(0)
 
 def load_config():
     cfg = SN()
-    cfg.epi_train = 1
+    cfg.epi_train = 12
     cfg.epi_eval = 1
     cfg.dt = 0.1
-    cfg.max_t = 10.
+    cfg.max_t = 2.
     cfg.solver = 'odeint'
     cfg.ode_step_len = 10
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
+
+    cfg.animation = SN()
+    cfg.animation.quad_size = 1.
+    cfg.animation.rotor_size = 0.5
+    cfg.animation.view_angle = [None, None]
 
     cfg.quad = SN()
     cfg.quad.num = 3
@@ -47,14 +52,15 @@ def load_config():
     cfg.load.dcm_init = rot.angle2dcm(0., 0., 0.).T
     cfg.load.mass = 4
     cfg.load.J = np.diag([0.2, 0.2, 0.2])
-    cfg.load.cg = np.vstack((0., 0., -1.))
+    cfg.load.cg = np.vstack((0., 0., -3.))
+    cfg.load.size = 3.
 
     cfg.link = SN()
     cfg.link.len = cfg.quad.num * [3.]
     cfg.link.anchor = [
-        cfg.quad.num * np.vstack((
-            1. * np.cos(i*2*np.pi/cfg.quad.num),
-            1. * np.sin(i*2*np.pi/cfg.quad.num),
+        np.vstack((
+            cfg.load.size * np.cos(i*2*np.pi/cfg.quad.num),
+            cfg.load.size * np.sin(i*2*np.pi/cfg.quad.num),
             0
         )) - cfg.load.cg for i in range(cfg.quad.num)
     ]
@@ -125,9 +131,35 @@ def main():
                 Path(cfg.dir, f"fig_{epi_num+1:05d}_epi")
             )
 
+def compare_animation(file_list, path_save):
+    data_list = [logging.load(file) for file in file_list]
+    _, info = logging.load(file_list[0], with_info=True)
+    cfg = info['cfg']
+    data_num = len(data_list)
+    fig_shape = split_int(data_num)
+    simple = False
+    if fig_shape[0] >= 3:
+        simple=True
+
+    fig, _ = plt.subplots(
+        fig_shape[0],
+        fig_shape[1],
+        subplot_kw=dict(projection="3d"),
+    )
+
+    ani = Animator(fig, data_list, cfg, simple=simple)
+    ani.animate()
+    ani.save(Path(path_save, "compare-animation.mp4"))
 
 if __name__ == "__main__":
-    main()
+    # main()
+
+    past = -1
+    dir_list = [x for x in Path('log').glob("*")]
+    file_list = [x for x in Path(dir_list[past], 'env_data').glob("*")]
+    compare_animation(file_list, dir_list[past])
+
+
 
 
 

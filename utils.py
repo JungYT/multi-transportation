@@ -56,6 +56,16 @@ def hat(v):
 def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi
 
+def split_int(num):
+    num_sqrt = np.sqrt(num)
+    if np.isclose(num_sqrt, int(num_sqrt)):
+        result = 2*[int(num_sqrt)]
+    elif (int(num_sqrt)+1) * int(num_sqrt) >= num:
+        result = [int(num_sqrt), int(num_sqrt)+1]
+    else:
+        result = [int(num_sqrt)+1, int(num_sqrt)+1]
+    return result
+
 def draw_plot(path_data, path_fig):
     data, info = logging.load(path_data, with_info=True)
     cfg = info['cfg']
@@ -73,7 +83,7 @@ def draw_plot(path_data, path_fig):
     quad_att_des = np.unwrap(data['quad_att_des'], axis=0) * 180/np.pi
     distance_btw_quads = data['distance_btw_quads']
     distance_btw_quad2anchor = data['distance_btw_quad2anchor']
-    anchor_pos = data['anchor_pos']
+    # anchor_pos = data['anchor_pos']
     # check_dynamics = data['check_dynamics']
 
     for i in range(cfg.quad.num):
@@ -296,26 +306,18 @@ def draw_plot(path_data, path_fig):
     plt.close('all')
 
 
-    quad_pos_test = quad_pos[:,:,0,:]
-    quad_dcm_test = data['quads']['quad00']['dcm']
-
-    fig = plt.figure()
-    ax = axes3d.Axes3D(fig)
-    # ax.set_xlim3d([load_pos[:,0,:].min()-10, load_pos[:,0,:].max()+10])
-    # ax.set_xlabel('X [m]')
-    # ax.set_ylim3d([load_pos[:,1,:].min()-10, load_pos[:,1,:].max()+10])
-    # ax.set_xlabel('Y [m]')
-    # ax.set_zlim3d([-load_pos[:,2,:].max()-10, load_pos[:,2,:].min()+10])
-    # ax.set_xlabel('Height [m]')
-    ani = Animator(fig, ax, quad_pos_test, quad_dcm_test)
+    # fig = plt.figure()
+    # plt.subplot(111, projection="3d")
+    fig, _ = plt.subplots(1, 1, subplot_kw=dict(projection="3d"))
+    ani = Animator(fig, [data], cfg)
     ani.animate()
-    ani.save(Path(path_fig, "test-animation.mp4"))
-    breakpoint()
+    ani.save(Path(path_fig, "animation.mp4"))
+
 
 class Quad_ani:
-    def __init__(self, ax, quad_pos, dcm):
-        d = 0.315
-        r = 0.15
+    def __init__(self, ax, cfg):
+        d = cfg.animation.quad_size
+        r = cfg.animation.rotor_size
 
         body_segs = np.array([
             [[d, 0, 0], [0, 0, 0]],
@@ -354,7 +356,6 @@ class Quad_ani:
             rotor._center = np.array(rotor._center + (0,))
             rotor._base = rotor._segment3d
 
-        self.set(quad_pos[0].squeeze(), dcm[0].squeeze())
 
     def set(self, pos, dcm=np.eye(3)):
         self.body._segments3d = np.array([
@@ -366,33 +367,130 @@ class Quad_ani:
                 dcm @ point for point in rotor._base
             ])
 
-        self.body._segments3d += pos
+        self.body._segments3d = self.body._segments3d + pos
         for rotor in self.rotors:
             rotor._segment3d += pos
 
+class Link_ani:
+    def __init__(self, ax):
+        self.link = art3d.Line3D(
+            [ ],
+            [ ],
+            [ ],
+            color="k",
+            linewidth=1
+        )
+        ax.add_line(self.link)
+
+    def set(self, quad_pos, anchor_pos):
+        self.link.set_data_3d(
+            [anchor_pos[0], quad_pos[0]],
+            [anchor_pos[1], quad_pos[1]],
+            [anchor_pos[2], quad_pos[2]]
+        )
+
+class Payload_ani:
+    def __init__(self, ax, edge_num):
+        load_segs = np.array(edge_num*[[[0, 0, 0],[1, 1, 1]]])
+        colors = edge_num*["k"]
+
+        self.load = art3d.Line3DCollection(
+            load_segs,
+            colors=colors,
+            linewidths=2
+        )
+        ax.add_collection3d(self.load)
+
+    def set(self, load_edge):
+        self.load.set_segments(load_edge)
+
 
 class Animator:
-    def __init__(self, fig, ax, quad_pos, quad_dcm):
+    def __init__(self, fig, data_list, cfg, simple=False):
         self.offsets = ['collections', 'patches', 'lines', 'texts',
                         'artists', 'images']
         self.fig = fig
-        self.ax = ax
-        self.quad_pos = quad_pos
-        self.dcm = quad_dcm
+        self.axes = fig.axes
+        # self.axes = axes
+        self.data_list = data_list
+        self.cfg = cfg
+        self.len = len(data_list)
+        self.simple = simple
 
     def init(self):
         self.frame_artists = []
+        max_x = np.array(
+            [data['load']['pos'][:,0,:].max() for data in self.data_list]
+        ).max()
+        min_x = np.array(
+            [data['load']['pos'][:,0,:].min() for data in self.data_list]
+        ).min()
+        max_y = np.array(
+            [data['load']['pos'][:,1,:].max() for data in self.data_list]
+        ).max()
+        min_y = np.array(
+            [data['load']['pos'][:,1,:].min() for data in self.data_list]
+        ).min()
+        max_z = np.array(
+            [data['load']['pos'][:,2,:].max() for data in self.data_list]
+        ).max()
+        min_z = np.array(
+            [data['load']['pos'][:,2,:].min() for data in self.data_list]
+        ).min()
 
-        self.ax.quad = Quad_ani(self.ax, self.quad_pos, self.dcm)
-        self.ax.set_xlim3d([-5, 5])
-        self.ax.set_ylim3d([-5, 5])
-        self.ax.set_zlim3d([-1, 5])
-        self.ax.set_xlabel('x')
-        self.ax.set_ylabel('y')
-        self.ax.set_zlabel('z')
+        for i, ax in enumerate(self.axes):
+            ax.quad = [Quad_ani(ax, self.cfg)
+                       for _ in range(self.cfg.quad.num)]
+            ax.link = [Link_ani(ax) for _ in range(self.cfg.quad.num)]
+            ax.load = Payload_ani(ax, self.cfg.quad.num)
+            ax.set_xlim3d([
+                min_x - self.cfg.load.size - self.cfg.animation.quad_size,
+                max_x + self.cfg.load.size + self.cfg.animation.quad_size
+            ])
+            ax.set_ylim3d([
+                min_y - self.cfg.load.size - self.cfg.animation.quad_size,
+                max_y + self.cfg.load.size + self.cfg.animation.quad_size
+            ])
+            ax.set_zlim3d([
+                max(min_z - self.cfg.link.len[0], 0.),
+                max_z + self.cfg.link.len[0] + self.cfg.load.cg[2]\
+                + self.cfg.animation.quad_size
+            ])
+            ax.view_init(
+                self.cfg.animation.view_angle[0],
+                self.cfg.animation.view_angle[1]
+            )
+            if i >= self.len:
+                ax.set_title("empty", fontsize='small', fontweight='bold')
+            else:
+                ax.set_title(
+                    f"{(i+1)*self.cfg.epi_eval:05d}_epi",
+                    fontsize='small',
+                    fontweight='bold'
+                )
+            if self.simple:
+                ax.axes.xaxis.set_ticklabels([])
+                ax.axes.yaxis.set_ticklabels([])
+                ax.axes.zaxis.set_ticklabels([])
+            else:
+                ax.set_xlabel('x [m]', fontsize='small')
+                ax.set_ylabel('y [m]', fontsize='small')
+                ax.set_zlabel('z [m]', fontsize='small')
+                ax.tick_params(axis='both', which='major', labelsize=8)
 
-        for name in self.offsets:
-            self.frame_artists += getattr(self.ax, name)
+            for name in self.offsets:
+                self.frame_artists += getattr(ax, name)
+        self.fig.tight_layout()
+        if not self.simple:
+            self.fig.subplots_adjust(
+                left=0,
+                bottom=0.1,
+                right=1,
+                top=0.95,
+                hspace=0.5,
+                wspace=0
+            )
+
 
         return self.frame_artists
 
@@ -402,14 +500,31 @@ class Animator:
         self.fig.show()
 
     def update(self, frame):
-        self.ax.quad.set(self.quad_pos[frame].squeeze(), self.dcm[frame].squeeze())
+        for data, ax in zip(self.data_list, self.axes):
+            load_vortex = data['anchor_pos'][frame].squeeze().tolist()
+            load_cg = data['load']['pos'][frame].squeeze().tolist()
+            load_edge = [[load_vortex[i-1], load_vortex[i]]
+                         for i in range(self.cfg.quad.num)] \
+                + [[load_vortex[i], load_cg]
+                   for i in range(self.cfg.quad.num)]
+            ax.load.set(load_edge)
+
+            for i in range(self.cfg.quad.num):
+                ax.quad[i].set(
+                    data["quad_pos"][frame,i,:,:].squeeze(),
+                    data["quads"][f"quad{i:02d}"]["dcm"][frame,:,:].squeeze()
+                )
+                ax.link[i].set(
+                    data["quad_pos"][frame,i,:,:].squeeze(),
+                    data["anchor_pos"][frame,i,:,:].squeeze()
+                )
         return self.frame_artists
 
     def animate(self, *args, **kwargs):
-        frames = range(0, len(self.quad_pos), 10)
+        frames = range(0, len(self.data_list[0]['time']), 10)
         self.anim = FuncAnimation(
             self.fig, self.update, init_func=self.init,
-            frames=frames, interval=1000, blit=True,
+            frames=frames, interval=200, blit=True,
             *args, **kwargs
         )
 

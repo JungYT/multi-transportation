@@ -236,7 +236,8 @@ class MultiQuadSlungLoad(BaseEnv):
             quad.set_dot(M)
 
     def step(self, load_pos_des, load_att_des, action):
-        quad_att_des = 3*[np.vstack((0., 0., 0.))]
+        quad_att_des = 3*[np.vstack((np.pi/12., 0., 0.))]
+        # quad_att_des = 3*[np.vstack((0., 0., 0.))]
         f_des = 3*[25]
         *_, time_out = self.update(quad_att_des=quad_att_des, f_des=f_des)
         done = self.terminate(time_out)
@@ -276,7 +277,7 @@ class MultiQuadSlungLoad(BaseEnv):
                 )
             )
             quad_att.append(
-                np.array(rot.dcm2angle(quads[f'quad{i:02d}']['dcm']))[::-1]
+                np.array(rot.dcm2angle(quads[f'quad{i:02d}']['dcm'].T))[::-1]
             )
             anchor_pos.append(load['pos'] + load['dcm'].dot(link.anchor))
             # check_dynamics.append(np.dot(

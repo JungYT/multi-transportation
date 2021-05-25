@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.linalg as nla
 import os
 from datetime import datetime
 from multiprocessing import Pool
@@ -8,10 +9,15 @@ import torch.optim as optim
 from collections import deque
 from matplotlib import pyplot as plt
 import time
+from matplotlib.animation import FuncAnimation
+import mpl_toolkits.mplot3d.art3d as art3d
+import mpl_toolkits.mplot3d.axes3d as ax3d
+from matplotlib.patches import Circle
 
 from fym.core import BaseEnv, BaseSystem
 import fym.core as core
 import fym.logging as logging
+from fym.utils import rot
 
 
 class Test(BaseEnv):
@@ -109,7 +115,145 @@ def test():
     ax.plot3D(1, 2, 3, marker="X")
     plt.show()
 
+class Quad_ani:
+    def __init__(self, ax, quad_pos, dcm):
+        d = 0.315
+        r = 0.15
+
+        body_segs = np.array([
+            [[d, 0, 0], [0, 0, 0]],
+            [[-d, 0, 0], [0, 0, 0]],
+            [[0, d, 0], [0, 0, 0]],
+            [[0, -d, 0], [0, 0, 0]]
+        ])
+        colors = (
+            (1, 0, 0, 1),
+            (0, 0, 1, 1),
+            (0, 0, 1, 1),
+            (0, 0, 1, 1),
+        )
+        self.body = art3d.Line3DCollection(
+            body_segs,
+            colors=colors,
+            linewidths=3
+        )
+
+        kwargs = dict(radius=r, ec="k", fc="k", alpha=0.3)
+        self.rotors = [
+            Circle((d, 0), **kwargs),
+            Circle((0, d), **kwargs),
+            Circle((-d, 0), **kwargs),
+            Circle((0, -d), **kwargs),
+        ]
+
+        ax.add_collection3d(self.body)
+        for rotor in self.rotors:
+            ax.add_patch(rotor)
+            art3d.pathpatch_2d_to_3d(rotor, z=0)
+
+        self.body._base = self.body._segments3d
+        for rotor in self.rotors:
+            rotor._segment3d = np.array(rotor._segment3d)
+            rotor._center = np.array(rotor._center + (0,))
+            rotor._base = rotor._segment3d
+
+        self.set(quad_pos[0], dcm[0])
+
+    def set(self, pos, dcm=np.eye(3)):
+        self.body._segments3d = np.array([
+            dcm @ point for point in self.body._base.reshape(-1, 3)
+        ]).reshape(self.body._base.shape)
+
+        for rotor in self.rotors:
+            rotor._segment3d = np.array([
+                dcm @ point for point in rotor._base
+            ])
+
+        self.body._segments3d += pos
+        for rotor in self.rotors:
+            rotor._segment3d += pos
+
+
+class Animator:
+    def __init__(self, fig, data_set):
+        self.offsets = ['collections', 'patches', 'lines', 'texts',
+                        'artists', 'images']
+        self.fig = fig
+        self.axes = fig.axes
+        self.data_set = data_set
+        self.quad_pos = data_set['quad']
+        self.dcm = data_set['dcm']
+
+    def init(self):
+        self.frame_artists = []
+
+        for ax in self.axes:
+            ax.quad = Quad_ani(ax, self.quad_pos, self.dcm)
+            ax.set_xlim3d([-1, 1])
+            ax.set_ylim3d([-1, 1])
+            ax.set_zlim3d([-1, 1])
+            ax.set_xlabel('x')
+            ax.set_ylabel('y')
+            ax.set_zlabel('z')
+
+            for name in self.offsets:
+                self.frame_artists += getattr(ax, name)
+
+        return self.frame_artists
+
+    def get_sample(self):
+        self.init()
+        self.update(0)
+        self.fig.show()
+
+    def update(self, frame):
+        for data, ax in zip(self.data_set, self.axes):
+            pos = data
+            R
+            ax.quad.set(pos, R)
+        return self.frame_artists
+
+    def animate(self, *args, **kwargs):
+        frames = range(0, 1000, 10)
+        self.anim = FuncAnimation(
+            self.fig, self.update, init_func=self.init,
+            frames=frames, interval=10, blit=True,
+            *args, **kwargs
+        )
+
+
+
+def Animator():
+
+        # segments = [[d, 0, 0], [-d, 0, 0], [0, d, 0], [0, -d, 0]]
+        # rotor_pos = [dcm@seg + pos for seg in segments]
+        # body_segs = np.array([[rotor_pos[i], pos] for i in range(4)])
+
+        # for i, rotor in enumerate(rotors):
+        #     ax.add_patch(rotor)
+        #     pathpatch_2d_to_3d(rotor, z=rotor_pos[i][2], dcm=dcm)
+            # pathpatch_2d_to_3d(rotor, z=0, dcm=dcm)
+
+        fig = plt.figure()
+        ax = ax3d.Axes3D(fig)
+        ax.set_xlim3d([-1, 1])
+        ax.set_xlabel('x')
+        ax.set_ylim3d([-1, 1])
+        ax.set_ylabel('y')
+        ax.set_zlim3d([-1, 1])
+        ax.set_zlabel('z')
+        quad_ani = Quad_ani(ax)
+        # quad_ani.set(np.array([0, 0, 0]), np.eye(3))
+        quad_ani.set(np.array([0, 0, 0]), rot.angle2dcm(0, np.pi/3, 0).T)
+
+        breakpoint()
+
+    # quad_ani(np.array((0, 0, 0)), rot.angle2dcm(0, np.pi/3, 0).T)
+
+
+
+
 
 
 if __name__ == "__main__":
-    main()
+    Animator()

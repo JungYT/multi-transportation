@@ -14,6 +14,7 @@ import torch.optim as optim
 import fym.logging as logging
 from fym.utils import rot
 from dynamics import MultiQuadSlungLoad
+from utils import draw_plot
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -24,7 +25,7 @@ def load_config():
     cfg.epi_train = 1
     cfg.epi_eval = 1
     cfg.dt = 0.1
-    cfg.max_t = 1.
+    cfg.max_t = 10.
     cfg.solver = 'odeint'
     cfg.ode_step_len = 10
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
@@ -36,17 +37,17 @@ def load_config():
     cfg.quad.iscollision = 0.5
 
     cfg.load = SN()
-    cfg.load.pos_bound = [[-5, 5], [-5, 5], [-10, -1]]
+    cfg.load.pos_bound = [[-5, 5], [-5, 5], [1, 10]]
     cfg.load.att_bound = [
         [-np.pi/4, np.pi/4],
         [-np.pi/4, np.pi/4],
         [-np.pi, np.pi]
     ]
-    cfg.load.pos_init = np.vstack((0., 0., -3.))
+    cfg.load.pos_init = np.vstack((0., 0., 3.))
     cfg.load.dcm_init = rot.angle2dcm(0., 0., 0.).T
     cfg.load.mass = 4
     cfg.load.J = np.diag([0.2, 0.2, 0.2])
-    cfg.load.cg = np.vstack((0., 0., 1.))
+    cfg.load.cg = np.vstack((0., 0., -1.))
 
     cfg.link = SN()
     cfg.link.len = cfg.quad.num * [3.]
@@ -59,13 +60,26 @@ def load_config():
     ]
     cfg.link.uvec_bound = [[-np.pi, np.pi], [0, np.pi/4]]
 
+    cfg.controller = SN()
+    cfg.controller.Ke = 20.
+    cfg.controller.Ks = 80.
+    cfg.controller.chattering_bound = 0.5
+    cfg.controller.unc_max = 0.1
+
     cfg.ddpg = SN()
     cfg.ddpg.P = np.diag([1., 1., 1., 1., 1., 1.])
+
+    cfg.noise = SN()
+    cfg.noise.rho = 0.15
+    cfg.noise.mu = 0.
+    cfg.noise.sigma = 0.2
+    cfg.noise.size = 9
+
     return cfg
 
 
 def train_MultiQuadSlungLoad(cfg):
-    load_pos_des = np.vstack((0., 0., -5.))
+    load_pos_des = np.vstack((0., 0., 5.))
     load_att_des = np.vstack((0., 0., 0.))
     env = MultiQuadSlungLoad(cfg)
     x = env.reset(load_pos_des, load_att_des)
@@ -77,14 +91,13 @@ def train_MultiQuadSlungLoad(cfg):
     env.close()
 
 
-def eval_MultiQuadSlungLoad(cfg, epi_num):
-    load_pos_des = np.vstack((0., 0., -5.))
+def eval_MultiQuadSlungLoad(cfg, path_data):
+    load_pos_des = np.vstack((0., 0., 5.))
     load_att_des = np.vstack((0., 0., 0.))
     env = MultiQuadSlungLoad(cfg)
-    env.logger = logging.Logger(
-        Path(cfg.dir, f"eval/{epi_num}.h5")
-    )
-    x = env.reset(load_pos_des, load_att_des)
+    env.logger = logging.Logger(path_data)
+    env.logger.set_info(cfg=cfg)
+    x = env.reset(load_pos_des, load_att_des, fixed_init=True)
     action = 1
     while True:
         xn, r, done = env.step(load_pos_des, load_att_des, action)
@@ -99,7 +112,18 @@ def main():
     for epi_num in tqdm(range(cfg.epi_train)):
         train_MultiQuadSlungLoad(cfg)
         if (epi_num+1) % cfg.epi_eval == 0:
-            eval_MultiQuadSlungLoad(cfg, epi_num)
+            eval_MultiQuadSlungLoad(
+                cfg,
+                Path(cfg.dir, f"env_data/{epi_num+1:05d}_epi.h5")
+            )
+            Path(cfg.dir, f"fig_{epi_num+1:05d}_epi").mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            draw_plot(
+                Path(cfg.dir, f"env_data/{epi_num+1:05d}_epi.h5"),
+                Path(cfg.dir, f"fig_{epi_num+1:05d}_epi")
+            )
 
 
 if __name__ == "__main__":

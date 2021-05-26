@@ -13,11 +13,13 @@ from matplotlib.animation import FuncAnimation
 import mpl_toolkits.mplot3d.art3d as art3d
 import mpl_toolkits.mplot3d.axes3d as ax3d
 from matplotlib.patches import Circle
+import timeit
 
 from fym.core import BaseEnv, BaseSystem
 import fym.core as core
 import fym.logging as logging
 from fym.utils import rot
+from utils import hat
 
 
 class Test(BaseEnv):
@@ -250,10 +252,53 @@ def Animator():
 
     # quad_ani(np.array((0, 0, 0)), rot.angle2dcm(0, np.pi/3, 0).T)
 
+def findDCM(a):
+    theta = np.arcsin(-a[0]).item()
+    phi = np.arcsin(a[1]/np.cos(theta)).item()
+    # a = a.reshape(-1,) / nla.norm(a)
+    # b = b.reshape(-1,) / nla.norm(b)
+    # v = np.cross(a, b)
+    # s = nla.norm(v)
+    # c = np.dot(a, b)
+    # R = np.eye(3) + hat(v) + hat(v).dot(hat(v)) / (1+c)
+    return phi, theta
 
+def findDCM2(a):
+    phi = np.arctan2(a[1], a[2]).item()
+    theta = np.arcsin(-a[0]).item()
+    return phi, theta
 
-
-
+def findDCM3(a, yaw):
+    b = rot.angle2dcm(yaw, 0, 0).dot(a)
+    theta = np.arctan2(b[0], b[2]).item()
+    phi = np.arctan2(-b[1]*b[2], np.cos(theta)*(1-b[1]**2)).item()
+    return phi, theta
 
 if __name__ == "__main__":
-    Animator()
+    a = np.vstack((0., 0., 1.))
+    b = rot.spherical2cartesian(1, -np.pi/4, np.pi/4)
+    yaw = 0
+    phi, theta = findDCM(b)
+    c = rot.angle2dcm(yaw, theta, phi).dot(b)
+    phi2, theta2 = findDCM2(b)
+    c2 = rot.angle2dcm(yaw, theta2, phi2).dot(b)
+    phi3, theta3 = findDCM3(b, yaw)
+    c3 = rot.angle2dcm(yaw, theta3, phi3).dot(b)
+    # print(b-c)
+    # print(b-c2)
+    if not np.isclose(a-c, np.vstack((0., 0., 0.))).any():
+        print('dcm1 is diff')
+    if not np.isclose(a-c2, np.vstack((0., 0., 0.))).any():
+        print('dcm2 is diff')
+    if not np.isclose(a-c3, np.vstack((0., 0., 0.))).any():
+        print('dcm3 is diff')
+    breakpoint()
+
+    # print(np.isclose(b-c, np.vstack((0., 0., 0.))))
+    # print(np.isclose(b-c2, np.vstack((0., 0., 0.))))
+
+    # t1 = timeit.timeit('findDCM()', setup='from __main__ import findDCM')
+    # t2 = timeit.timeit('findDCM2()', setup='from __main__ import findDCM2')
+    # print(t1)
+    # print(t2)
+

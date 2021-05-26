@@ -14,7 +14,7 @@ import torch.optim as optim
 import fym.logging as logging
 from fym.utils import rot
 from dynamics import MultiQuadSlungLoad
-from utils import draw_plot, Animator, split_int
+from utils import draw_plot, Animator, split_int, compare_animation
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -22,7 +22,7 @@ random.seed(0)
 
 def load_config():
     cfg = SN()
-    cfg.epi_train = 12
+    cfg.epi_train = 2
     cfg.epi_eval = 1
     cfg.dt = 0.1
     cfg.max_t = 2.
@@ -31,8 +31,8 @@ def load_config():
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
 
     cfg.animation = SN()
-    cfg.animation.quad_size = 1.
-    cfg.animation.rotor_size = 0.5
+    cfg.animation.quad_size = 1.5
+    cfg.animation.rotor_size = 0.8
     cfg.animation.view_angle = [None, None]
 
     cfg.quad = SN()
@@ -89,9 +89,10 @@ def train_MultiQuadSlungLoad(cfg):
     load_att_des = np.vstack((0., 0., 0.))
     env = MultiQuadSlungLoad(cfg)
     x = env.reset(load_pos_des, load_att_des)
-    action = 1
+    psi_des = 3*[0]
+    action = np.hstack(3*[24., 0., 0.])
     while True:
-        xn, r, done = env.step(load_pos_des, load_att_des, action)
+        xn, r, done = env.step(load_pos_des, load_att_des, action, psi_des)
         if done:
             break
     env.close()
@@ -104,9 +105,10 @@ def eval_MultiQuadSlungLoad(cfg, path_data):
     env.logger = logging.Logger(path_data)
     env.logger.set_info(cfg=cfg)
     x = env.reset(load_pos_des, load_att_des, fixed_init=True)
-    action = 1
+    psi_des = 3*[0]
+    action = np.hstack(3*[24., 0., 0.])
     while True:
-        xn, r, done = env.step(load_pos_des, load_att_des, action)
+        xn, r, done = env.step(load_pos_des, load_att_des, action, psi_des)
         if done:
             break
     env.close()
@@ -131,28 +133,9 @@ def main():
                 Path(cfg.dir, f"fig_{epi_num+1:05d}_epi")
             )
 
-def compare_animation(file_list, path_save):
-    data_list = [logging.load(file) for file in file_list]
-    _, info = logging.load(file_list[0], with_info=True)
-    cfg = info['cfg']
-    data_num = len(data_list)
-    fig_shape = split_int(data_num)
-    simple = False
-    if fig_shape[0] >= 3:
-        simple=True
-
-    fig, _ = plt.subplots(
-        fig_shape[0],
-        fig_shape[1],
-        subplot_kw=dict(projection="3d"),
-    )
-
-    ani = Animator(fig, data_list, cfg, simple=simple)
-    ani.animate()
-    ani.save(Path(path_save, "compare-animation.mp4"))
 
 if __name__ == "__main__":
-    # main()
+    main()
 
     past = -1
     dir_list = [x for x in Path('log').glob("*")]

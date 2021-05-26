@@ -154,7 +154,7 @@ class MultiQuadSlungLoad(BaseEnv):
         omega_hat = hat(omega)
         omega_hat_square = omega_hat.dot(omega_hat)
 
-        for i,(link, quad) in enumerate(
+        for i, (link, quad) in enumerate(
             zip(self.links.systems, self.quads.systems)
         ):
             l = link.len
@@ -235,10 +235,11 @@ class MultiQuadSlungLoad(BaseEnv):
             )
             quad.set_dot(M)
 
-    def step(self, load_pos_des, load_att_des, action):
-        quad_att_des = 3*[np.vstack((np.pi/12., 0., 0.))]
+    def step(self, load_pos_des, load_att_des, action, psi_des):
+        # quad_att_des = 3*[np.vstack((np.pi/12., 0., 0.))]
         # quad_att_des = 3*[np.vstack((0., 0., 0.))]
-        f_des = 3*[25]
+        # f_des = 3*[25]
+        f_des, quad_att_des = self.transform_action2des(action, psi_des)
         *_, time_out = self.update(quad_att_des=quad_att_des, f_des=f_des)
         done = self.terminate(time_out)
         obs = self.observe(load_pos_des, load_att_des)
@@ -346,20 +347,45 @@ class MultiQuadSlungLoad(BaseEnv):
         return M
 
     def observe(self, load_pos_des, load_att_des):
+        obs = [np.array(rot.cartesian2spherical(link.uvec.state))[1::]
+               for link in self.links.systems]
         load_pos = self.load.pos.state
         load_att = np.vstack(rot.dcm2angle(self.load.dcm.state.T))[::-1]
         e_load_pos = load_pos - load_pos_des
         e_load_att = load_att - load_att_des
-        return np.vstack((e_load_pos, e_load_att))
+        obs.append(e_load_pos.reshape(-1,))
+        obs.append(e_load_att.reshape(-1,))
+        return np.hstack(obs)
 
     def get_reward(self, load_pos_des, load_att_des):
-        obs = self.observe(load_pos_des, load_att_des)
+        error = self.observe(load_pos_des, load_att_des)[0:6]
         load_pos = self.load.pos.state
         if (load_pos[2] < 0 or self.iscollision):
             r = -np.array([50])
         else:
-            r = -np.transpose(obs).dot(self.P.dot(obs)).reshape(-1,)
+            r = -np.transpose(error).dot(self.P.dot(error)).reshape(-1,)
         return r
+
+    def transform_action2des(self, action, psi_des):
+        f_des = [action[3*i] for i in range(self.cfg.quad.num)]
+        quad_att_des = []
+        for i in range(self.cfg.quad.num):
+            chi, gamma = action[3*i+1:3*i+3]
+            u_des = rot.spherical2cartesian(1, chi, gamma)
+            phi, theta = self.find_euler(u_des, psi_des[i])
+            quad_att_des.append(np.vstack((phi, theta, psi_des[i])))
+        return f_des, quad_att_des
+
+    def find_euler(self, vec, psi):
+        vec_n = rot.angle2dcm(psi, 0, 0).dot(vec)
+        theta = np.arctan2(vec_n[0], vec_n[2]).item()
+        phi = np.arctan2(
+            -vec_n[1]*vec_n[2],
+            np.cos(theta)*(1-vec_n[1]**2)
+        ).item()
+        return phi, theta
+
+
 
 
 

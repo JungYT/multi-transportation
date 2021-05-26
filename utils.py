@@ -532,3 +532,22 @@ class Animator:
         self.anim.save(path, writer="ffmpeg", fps=30, *args, **kwargs)
 
 
+def compare_animation(file_list, path_save):
+    data_list = [logging.load(file) for file in file_list]
+    _, info = logging.load(file_list[0], with_info=True)
+    cfg = info['cfg']
+    data_num = len(data_list)
+    fig_shape = split_int(data_num)
+    simple = False
+    if fig_shape[0] >= 3:
+        simple=True
+
+    fig, _ = plt.subplots(
+        fig_shape[0],
+        fig_shape[1],
+        subplot_kw=dict(projection="3d"),
+    )
+
+    ani = Animator(fig, data_list, cfg, simple=simple)
+    ani.animate()
+    ani.save(Path(path_save, "compare-animation.mp4"))

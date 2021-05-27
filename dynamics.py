@@ -102,7 +102,7 @@ class MultiQuadSlungLoad(BaseEnv):
     def __init__(self, cfg):
         super().__init__(dt=cfg.dt, max_t=cfg.max_t, solver=cfg.solver,
                          ode_step_len=cfg.ode_step_len)
-        self.quad_num = cfg.quad.num
+        self.cfg = cfg
         self.load = Load(
             cfg.load.pos_bound,
             cfg.load.att_bound,
@@ -113,30 +113,25 @@ class MultiQuadSlungLoad(BaseEnv):
             cfg.link.len[i],
             cfg.link.anchor[i],
             cfg.link.uvec_bound
-        ) for i in range(self.quad_num)})
+        ) for i in range(cfg.quad.num)})
         self.quads = core.Sequential(**{f"quad{i:02d}": Quadrotor(
             cfg.quad.mass,
             cfg.quad.J
-        ) for i in range(self.quad_num)})
+        ) for i in range(cfg.quad.num)})
         self.g = np.vstack((0., 0., -9.81))
-        self.cfg = cfg
 
-        self.S1_set = deque(maxlen=self.quad_num)
-        self.S2_set = deque(maxlen=self.quad_num)
-        self.S3_set = deque(maxlen=self.quad_num)
-        self.S4_set = deque(maxlen=self.quad_num)
-        self.S5_set = deque(maxlen=self.quad_num)
-        self.S6_set = deque(maxlen=self.quad_num)
-        self.S7_set = deque(maxlen=self.quad_num)
+        self.S1_set = deque(maxlen=cfg.quad.num)
+        self.S2_set = deque(maxlen=cfg.quad.num)
+        self.S3_set = deque(maxlen=cfg.quad.num)
+        self.S4_set = deque(maxlen=cfg.quad.num)
+        self.S5_set = deque(maxlen=cfg.quad.num)
+        self.S6_set = deque(maxlen=cfg.quad.num)
+        self.S7_set = deque(maxlen=cfg.quad.num)
 
         self.iscollision = False
-        self.P = cfg.ddpg.P
-        self.Ke = cfg.controller.Ke
-        self.Ks = cfg.controller.Ks
-        self.chattering_bound = cfg.controller.chattering_bound
-        self.unc_max = cfg.controller.unc_max
 
-    def reset(self, load_pos_des, load_att_des, fixed_init=False):
+    def reset(self, des, fixed_init=False):
+        load_pos_des, load_att_des, _ = des
         super().reset()
         if fixed_init:
             self.load.pos.state = self.cfg.load.pos_init
@@ -235,16 +230,27 @@ class MultiQuadSlungLoad(BaseEnv):
             )
             quad.set_dot(M)
 
-    def step(self, load_pos_des, load_att_des, action, psi_des):
+    def step(self, action, des):
         # quad_att_des = 3*[np.vstack((np.pi/12., 0., 0.))]
         # quad_att_des = 3*[np.vstack((0., 0., 0.))]
         # f_des = 3*[25]
-        f_des, quad_att_des = self.transform_action2des(action, psi_des)
-        *_, time_out = self.update(quad_att_des=quad_att_des, f_des=f_des)
+        load_pos_des, load_att_des, psi_des = des
+        quad_att_des, f_des = self.transform_action2des(action, psi_des)
+        *_, time_out = self.update(
+            quad_att_des=quad_att_des,
+            f_des = f_des,
+        )
         done = self.terminate(time_out)
         obs = self.observe(load_pos_des, load_att_des)
         reward = self.get_reward(load_pos_des, load_att_des)
-        return obs, reward, done
+        info = {
+            'agent': {
+                'time': self.clock.get(),
+                'reward': reward,
+                'action': action,
+            }
+        }
+        return obs, reward, done, info
 
     def logger_callback(self, t, y, i, t_hist, ode_hist,
                         quad_att_des, f_des):
@@ -288,18 +294,17 @@ class MultiQuadSlungLoad(BaseEnv):
             #                       )
         distance_btw_quads = self.check_collision(quad_pos)
         distance_btw_quad2anchor = [nla.norm(quad_pos[i]-anchor_pos[i])
-                    for i in range(self.quad_num)]
+                    for i in range(self.cfg.quad.num)]
         return dict(time=t, **states, load_att=load_att, quad_moment=M,
-                    quad_att_des=quad_att_des, f_des=f_des,
-                    quad_pos=quad_pos, quad_vel=quad_vel, quad_att=quad_att,
+                    quad_att_des=quad_att_des, quad_pos=quad_pos,
+                    quad_vel=quad_vel, quad_att=quad_att,
                     anchor_pos=anchor_pos,
                     distance_btw_quads=distance_btw_quads,
                     distance_btw_quad2anchor=distance_btw_quad2anchor)
 
     def check_collision(self, quads_pos):
-        distance = [nla.norm(quads_pos[i]-quads_pos[i+1])
-                      for i in range(self.quad_num-1)]
-        distance.append(nla.norm(quads_pos[-1] - quads_pos[0]))
+        distance = [nla.norm(quads_pos[i-1]-quads_pos[i])
+                      for i in range(self.cfg.quad.num)]
         if not self.iscollision and any(
             i < self.cfg.quad.iscollision for i in distance
         ):
@@ -339,10 +344,11 @@ class MultiQuadSlungLoad(BaseEnv):
         b = np.vstack((wx, 0., 0.))
         e2 = L.dot(omega)
         e1 = quad_att - quad_att_des
-        s = self.Ke*e1 + e2
-        s_clip = np.clip(s/self.chattering_bound, -1, 1)
+        s = self.cfg.controller.Ke*e1 + e2
+        s_clip = np.clip(s/self.cfg.controller.chattering_bound, -1, 1)
         M = (J.dot(nla.inv(L))).dot(
-            -self.Ke*e2 - b - L2.dot(e2) - s_clip*(self.unc_max + self.Ks)
+            -self.cfg.controller.Ke*e2 - b - L2.dot(e2) \
+            - s_clip*(self.cfg.controller.unc_max + self.cfg.controller.Ks)
         ) + omega_hat.dot(J.dot(omega))
         return M
 
@@ -361,10 +367,13 @@ class MultiQuadSlungLoad(BaseEnv):
         error = self.observe(load_pos_des, load_att_des)[0:6]
         load_pos = self.load.pos.state
         if (load_pos[2] < 0 or self.iscollision):
-            r = -np.array([50])
+            r = -np.array([self.cfg.ddpg.reward_max])
         else:
-            r = -np.transpose(error).dot(self.P.dot(error)).reshape(-1,)
-        return r
+            r = -np.transpose(error).dot(
+                self.cfg.ddpg.P.dot(error)
+            ).reshape(-1,)
+        r_scaled = r/(self.cfg.ddpg.reward_max/2)+1
+        return r_scaled
 
     def transform_action2des(self, action, psi_des):
         f_des = [action[3*i] for i in range(self.cfg.quad.num)]
@@ -374,7 +383,16 @@ class MultiQuadSlungLoad(BaseEnv):
             u_des = rot.spherical2cartesian(1, chi, gamma)
             phi, theta = self.find_euler(u_des, psi_des[i])
             quad_att_des.append(np.vstack((phi, theta, psi_des[i])))
-        return f_des, quad_att_des
+        return quad_att_des, f_des
+
+    # def transform_des2action(self, quad_att_des, f_des, psi_des):
+    #     action = []
+    #     for i, att in enumerate(quad_att_des):
+    #         dcm = rot.angle2dcm(psi_des[i], att[i][1], att[i][0])
+    #         _, chi, gamma = rot.cartesian2spherical(
+    #             (dcm.T).dot(np.vstack((0., 0., 1.)))
+    #         )
+    #         action.append([f_des[i], chi, gamma])
 
     def find_euler(self, vec, psi):
         vec_n = rot.angle2dcm(psi, 0, 0).dot(vec)
@@ -384,9 +402,4 @@ class MultiQuadSlungLoad(BaseEnv):
             np.cos(theta)*(1-vec_n[1]**2)
         ).item()
         return phi, theta
-
-
-
-
-
 

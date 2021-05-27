@@ -11,9 +11,9 @@ from fym.utils import rot
 
 
 class OrnsteinUhlenbeckNoise:
-    def __init__(self, rho, sigma, dt, size, x0=None):
+    def __init__(self, rho, mu, sigma, dt, size, x0=None):
         self.rho = rho
-        self.mu = 0
+        self.mu = mu
         self.sigma = sigma
         self.dt = dt
         self.x0 = x0
@@ -83,6 +83,10 @@ def draw_plot(path_data, path_fig):
     quad_att_des = np.unwrap(data['quad_att_des'], axis=0) * 180/np.pi
     distance_btw_quads = data['distance_btw_quads']
     distance_btw_quad2anchor = data['distance_btw_quad2anchor']
+
+    time_agent = data['agent']['time']
+    action = data['agent']['action']
+    reward = data['agent']['reward']
     # anchor_pos = data['anchor_pos']
     # check_dynamics = data['check_dynamics']
 
@@ -186,6 +190,25 @@ def draw_plot(path_data, path_fig):
         )
         plt.close('all')
 
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time_agent, action[:,cfg.quad.num*i])
+        ax[1].plot(time_agent, action[:,cfg.quad.num*i+1]*180/np.pi)
+        ax[2].plot(time_agent, action[:,cfg.quad.num*i+2]*180/np.pi)
+        ax[0].set_title(f"Action of Quadrotor {i}")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[0].set_ylabel("Total thrust [N]")
+        ax[1].set_ylabel("$chi$ [deg]")
+        ax[2].set_ylabel("$gamma$ [deg]")
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(
+            Path(path_fig, f"quad_{i}_action.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
+
     fig, ax = plt.subplots(nrows=3, ncols=1)
     ax[0].plot(time, load_pos[:,0])
     ax[1].plot(time, load_pos[:,1])
@@ -284,9 +307,9 @@ def draw_plot(path_data, path_fig):
     plt.close('all')
 
     fig, ax = plt.subplots(nrows=1, ncols=1)
-    line1, = ax.plot(time, distance_btw_quads[:,0], 'r')
-    line2, = ax.plot(time, distance_btw_quads[:,1], 'g')
-    line3, = ax.plot(time, distance_btw_quads[:,2], 'b')
+    line1, = ax.plot(time, distance_btw_quads[:,1], 'r')
+    line2, = ax.plot(time, distance_btw_quads[:,2], 'g')
+    line3, = ax.plot(time, distance_btw_quads[:,0], 'b')
     line4, = ax.plot(time, cfg.quad.iscollision*np.ones(len(time)), 'k--')
     ax.legend(handles=(line1, line2, line3, line4),
               labels=(
@@ -393,16 +416,27 @@ class Payload_ani:
     def __init__(self, ax, edge_num):
         load_segs = np.array(edge_num*[[[0, 0, 0],[1, 1, 1]]])
         colors = edge_num*["k"]
+        self.edge_num = edge_num
 
         self.load = art3d.Line3DCollection(
             load_segs,
             colors=colors,
-            linewidths=2
+            linewidths=1.5
         )
         ax.add_collection3d(self.load)
 
-    def set(self, load_edge):
+        verts = [3*[[1, 1, 1]]]
+        self.cover = art3d.Poly3DCollection(verts)
+        self.cover.set_facecolor(colors="k")
+        self.cover.set_edgecolor(colors="k")
+        self.cover.set_alpha(alpha=0.3)
+        ax.add_collection3d(self.cover)
+
+    def set(self, load_verts, load_cg):
+        load_edge = [[load_verts[i], load_cg] for i in range(self.edge_num)]
         self.load.set_segments(load_edge)
+        verts = [load_verts]
+        self.cover.set_verts(verts)
 
 
 class Animator:
@@ -453,7 +487,7 @@ class Animator:
             ])
             ax.set_zlim3d([
                 max(min_z - self.cfg.link.len[0], 0.),
-                max_z + self.cfg.link.len[0] + self.cfg.load.cg[2]\
+                max_z + self.cfg.link.len[0] - self.cfg.load.cg[2]\
                 + self.cfg.animation.quad_size
             ])
             ax.view_init(
@@ -501,13 +535,9 @@ class Animator:
 
     def update(self, frame):
         for data, ax in zip(self.data_list, self.axes):
-            load_vortex = data['anchor_pos'][frame].squeeze().tolist()
+            load_verts = data['anchor_pos'][frame].squeeze().tolist()
             load_cg = data['load']['pos'][frame].squeeze().tolist()
-            load_edge = [[load_vortex[i-1], load_vortex[i]]
-                         for i in range(self.cfg.quad.num)] \
-                + [[load_vortex[i], load_cg]
-                   for i in range(self.cfg.quad.num)]
-            ax.load.set(load_edge)
+            ax.load.set(load_verts, load_cg)
 
             for i in range(self.cfg.quad.num):
                 ax.quad[i].set(
@@ -532,7 +562,7 @@ class Animator:
         self.anim.save(path, writer="ffmpeg", fps=30, *args, **kwargs)
 
 
-def compare_animation(file_list, path_save):
+def compare_episode(file_list, path_save):
     data_list = [logging.load(file) for file in file_list]
     _, info = logging.load(file_list[0], with_info=True)
     cfg = info['cfg']
@@ -551,3 +581,29 @@ def compare_animation(file_list, path_save):
     ani = Animator(fig, data_list, cfg, simple=simple)
     ani.animate()
     ani.save(Path(path_save, "compare-animation.mp4"))
+    plt.close('all')
+
+    return_list = []
+    for i, data in enumerate(data_list):
+        G = 0
+        for r in data['agent']['reward'][::-1]:
+            G = r.item() + cfg.ddpg.discount*G
+        return_list.append([(i+1)*cfg.epi_eval, G])
+    return_list = np.array(return_list)
+
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(return_list[:,0], return_list[:,1])
+    ax.set_title("Return")
+    ax.set_ylabel("Return")
+    ax.set_xlabel("Episode")
+    ax.grid(True)
+    fig.savefig(
+        Path(path_save, "return.png"),
+        bbox_inches='tight'
+    )
+    plt.close()
+
+
+
+
+

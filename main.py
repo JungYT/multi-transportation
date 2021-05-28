@@ -23,7 +23,7 @@ random.seed(0)
 
 def load_config():
     cfg = SN()
-    cfg.epi_train = 1000
+    cfg.epi_train = 10000
     cfg.epi_eval = 100
     cfg.dt = 0.1
     cfg.max_t = 5.
@@ -41,6 +41,7 @@ def load_config():
     cfg.quad.mass = 0.755
     cfg.quad.J = np.diag([0.0820, 0.0845, 0.1377])
     cfg.quad.iscollision = 0.5
+    cfg.quad.psi_des = cfg.quad.num*[0]
 
     cfg.load = SN()
     cfg.load.pos_bound = [[-5, 5], [-5, 5], [1, 10]]
@@ -55,6 +56,8 @@ def load_config():
     cfg.load.J = np.diag([0.2, 0.2, 0.2])
     cfg.load.cg = np.vstack((0., 0., -3.))
     cfg.load.size = 3.
+    cfg.load.pos_des = np.vstack((0., 0., 5.))
+    cfg.load.att_des = np.vstack((0., 0., 0.))
 
     cfg.link = SN()
     cfg.link.len = cfg.quad.num * [3.]
@@ -267,9 +270,9 @@ def main():
         cfg.dt,
         cfg.ddpg.action_dim
     )
-    load_pos_des = np.vstack((0., 0., 5.))
-    load_att_des = np.vstack((0., 0., 0.))
-    psi_des = 3*[0]
+    load_pos_des = cfg.load.pos_des
+    load_att_des = cfg.load.att_des
+    psi_des = cfg.quad.psi_des
     des = [load_pos_des, load_att_des, psi_des]
 
     for epi_num in tqdm(range(cfg.epi_train)):
@@ -310,7 +313,7 @@ if __name__ == "__main__":
     past = -1
     dir_list = [x for x in Path('log').glob("*")]
     file_list = [x for x in Path(dir_list[past], 'env_data').glob("*")]
-    compare_episode(file_list, dir_list[past])
+    compare_episode(file_list, dir_list[past], ani=False)
     plt.close('all')
 
 

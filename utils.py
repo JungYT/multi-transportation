@@ -357,7 +357,7 @@ class Quad_ani:
         self.body = art3d.Line3DCollection(
             body_segs,
             colors=colors,
-            linewidths=3
+            linewidths=2
         )
 
         kwargs = dict(radius=r, ec="k", fc="k", alpha=0.3)

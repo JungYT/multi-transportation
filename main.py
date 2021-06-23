@@ -23,17 +23,18 @@ random.seed(0)
 
 def load_config():
     cfg = SN()
-    cfg.epi_train = 10000
-    cfg.epi_eval = 100
+    cfg.epi_train = 1
+    cfg.epi_eval = 1
     cfg.dt = 0.1
     cfg.max_t = 5.
     cfg.solver = 'odeint'
     cfg.ode_step_len = 10
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
+    cfg.g = np.vstack((0., 0., -9.81))
 
     cfg.animation = SN()
-    cfg.animation.quad_size = 1.5
-    cfg.animation.rotor_size = 0.8
+    cfg.animation.quad_size = 0.315
+    cfg.animation.rotor_size = 0.15
     cfg.animation.view_angle = [None, None]
 
     cfg.quad = SN()
@@ -42,6 +43,7 @@ def load_config():
     cfg.quad.J = np.diag([0.0820, 0.0845, 0.1377])
     cfg.quad.iscollision = 0.5
     cfg.quad.psi_des = cfg.quad.num*[0]
+    cfg.quad.omega_init = np.vstack((0., 0., 0.))
 
     cfg.load = SN()
     cfg.load.pos_bound = [[-5, 5], [-5, 5], [1, 10]]
@@ -52,15 +54,16 @@ def load_config():
     ]
     cfg.load.pos_init = np.vstack((0., 0., 3.))
     cfg.load.dcm_init = rot.angle2dcm(0., 0., 0.).T
-    cfg.load.mass = 4
+    cfg.load.vel_init = np.vstack((0., 0., 0.))
+    cfg.load.mass = 1.5
     cfg.load.J = np.diag([0.2, 0.2, 0.2])
-    cfg.load.cg = np.vstack((0., 0., -3.))
-    cfg.load.size = 3.
+    cfg.load.cg = np.vstack((0., 0., -0.7))
+    cfg.load.size = 1.
     cfg.load.pos_des = np.vstack((0., 0., 5.))
     cfg.load.att_des = np.vstack((0., 0., 0.))
 
     cfg.link = SN()
-    cfg.link.len = cfg.quad.num * [3.]
+    cfg.link.len = cfg.quad.num * [0.5]
     cfg.link.anchor = [
         np.vstack((
             cfg.load.size * np.cos(i*2*np.pi/cfg.quad.num),
@@ -82,9 +85,9 @@ def load_config():
     cfg.ddpg.state_dim = 6 + 2*cfg.quad.num
     cfg.ddpg.action_dim = 3*cfg.quad.num
     cfg.ddpg.action_scaling = torch.Tensor(
-        cfg.quad.num * [2., np.pi, np.pi/12]
+        cfg.quad.num * [2.5, np.pi, np.pi/12]
     )
-    cfg.ddpg.action_bias = torch.Tensor(cfg.quad.num * [22., 0, np.pi/12])
+    cfg.ddpg.action_bias = torch.Tensor(cfg.quad.num * [12.5, 0, np.pi/12])
     cfg.ddpg.memory_size = 20000
     cfg.ddpg.actor_lr = 0.0001
     cfg.ddpg.critic_lr = 0.001
@@ -243,6 +246,7 @@ def train_MultiQuadSlungLoad(agent, des, cfg, noise):
         if done:
             break
     env.close()
+    plt.close('all')
 
 
 def eval_MultiQuadSlungLoad(agent, des, cfg, path_save):
@@ -257,6 +261,91 @@ def eval_MultiQuadSlungLoad(agent, des, cfg, path_save):
         x = xn
         if done:
             break
+    env.close()
+    plt.close('all')
+
+
+def train_test(agent, des, cfg, noise, env):
+    x = env.reset(des)
+    noise.reset()
+    while True:
+        action = np.clip(
+            agent.get_action(x) + noise.get_noise(),
+            np.array(-cfg.ddpg.action_scaling + cfg.ddpg.action_bias),
+            np.array(cfg.ddpg.action_scaling + cfg.ddpg.action_bias)
+        )
+        xn, r, done, _ = env.step(action, des)
+        agent.memorize((x, action, r, xn, done))
+        x = xn
+        if len(agent.memory) > 5 * cfg.ddpg.batch_size:
+            agent.train()
+        if done:
+            break
+    plt.close('all')
+
+
+def eval_test(agent, des, cfg, path_save, env):
+    env.logger = logging.Logger(path_save)
+    env.logger.set_info(cfg=cfg)
+    x = env.reset(des, fixed_init=True)
+    while True:
+        action = agent.get_action(x)
+        xn, _, done, info = env.step(action, des)
+        env.logger.record(**info)
+        x = xn
+        if done:
+            break
+    env.logger.close()
+    plt.close('all')
+
+
+def main_test():
+    cfg = load_config()
+    env = MultiQuadSlungLoad(cfg)
+    agent = DDPG(cfg)
+    noise = OrnsteinUhlenbeckNoise(
+        cfg.noise.rho,
+        cfg.noise.mu,
+        np.array(cfg.ddpg.action_scaling),
+        cfg.dt,
+        cfg.ddpg.action_dim
+    )
+    load_pos_des = cfg.load.pos_des
+    load_att_des = cfg.load.att_des
+    psi_des = cfg.quad.psi_des
+    des = [load_pos_des, load_att_des, psi_des]
+
+    for epi_num in tqdm(range(cfg.epi_train)):
+        train_test(agent, des, cfg, noise, env)
+        if (epi_num+1) % cfg.epi_eval == 0:
+            path_env = Path(cfg.dir, f"env_data/{epi_num+1:05d}_epi.h5")
+            Path(cfg.dir, f"agent_data").mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            path_agent = Path(
+                cfg.dir,
+                f"agent_data/params_{epi_num+1:05d}.pt"
+            )
+            Path(cfg.dir, f"fig_{epi_num+1:05d}_epi").mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            path_fig = Path(cfg.dir, f"fig_{epi_num+1:05d}_epi")
+
+            eval_test(
+                agent,
+                des,
+                cfg,
+                path_env,
+                env
+            )
+
+            draw_plot(
+                path_env,
+                path_fig
+            )
+            agent.save_parameters(path_agent)
     env.close()
 
 
@@ -308,12 +397,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    main_test()
 
     past = -1
     dir_list = [x for x in Path('log').glob("*")]
     file_list = [x for x in Path(dir_list[past], 'env_data').glob("*")]
-    compare_episode(file_list, dir_list[past], ani=False)
+    compare_episode(file_list, dir_list[past], ani=True)
     plt.close('all')
 
 

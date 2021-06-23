@@ -63,7 +63,7 @@ class Load(BaseEnv):
 class Link(BaseEnv):
     def __init__(self, length, anchor, uvec_bound):
         super().__init__()
-        self.uvec = BaseSystem(rot.spherical2cartesian(
+        self.uvec = BaseSystem(rot.sph2cart2(
             1,
             np.random.uniform(
                 low=uvec_bound[0][0],
@@ -118,7 +118,9 @@ class MultiQuadSlungLoad(BaseEnv):
             cfg.quad.mass,
             cfg.quad.J
         ) for i in range(cfg.quad.num)})
-        self.g = np.vstack((0., 0., -9.81))
+        self.g = cfg.g
+        self.e3 = np.vstack((0., 0., 1.))
+        self.eye = np.eye(3)
 
         self.S1_set = deque(maxlen=cfg.quad.num)
         self.S2_set = deque(maxlen=cfg.quad.num)
@@ -137,8 +139,9 @@ class MultiQuadSlungLoad(BaseEnv):
             self.load.pos.state = self.cfg.load.pos_init
             self.load.dcm.state = self.cfg.load.dcm_init
 
+            uvec_init = np.vstack((0., 0., -1.))
             for link in self.links.systems:
-                link.uvec.state = np.vstack((0., 0., -1.))
+                link.uvec.state = uvec_init
         obs = self.observe(load_pos_des, load_att_des)
         return obs
 
@@ -158,14 +161,14 @@ class MultiQuadSlungLoad(BaseEnv):
             w = link.omega.state
             m = quad.mass
             R = quad.dcm.state
-            u = f_des[i] * R.dot(np.vstack((0., 0., 1.)))
+            u = f_des[i] * R.dot(self.e3)
 
             m_T += m
             q_hat_square = (hat(q)).dot(hat(q))
-            q_qT = np.eye(3) + q_hat_square
+            q_qT = self.eye + q_hat_square
             rho_hat = hat(rho)
             rhohat_R0T = rho_hat.dot(R0.T)
-            w_norm = nla.norm(w)
+            w_norm = np.sqrt(w[0]**2 + w[1]**2 + w[2]**2)
             l_w_square_q = l * w_norm * w_norm * q
             R0_omega_square_rho = R0.dot(omega_hat_square.dot(rho))
 
@@ -198,7 +201,7 @@ class MultiQuadSlungLoad(BaseEnv):
         J_bar = self.load.J - S7
         J_hat = self.load.J + S3
         J_hat_inv = np.linalg.inv(J_hat)
-        Mq = m_T*np.eye(3) + S4
+        Mq = m_T*self.eye + S4
         A = -J_hat_inv.dot(S5)
         B = J_hat_inv.dot(S6 - omega_hat.dot(J_bar.dot(omega)))
         C = Mq + S2.dot(A)
@@ -216,7 +219,7 @@ class MultiQuadSlungLoad(BaseEnv):
             q_hat = hat(q)
             m = quad.mass
             R = quad.dcm.state
-            u = f_des[i] * R.dot(np.vstack((0., 0., 1.)))
+            u = f_des[i] * R.dot(self.e3)
             R0_omega_square_rho = R0.dot(omega_hat_square.dot(rho))
             D = R0.dot(hat(rho).dot(load_ang_acc)) + self.g + u/m
 
@@ -353,7 +356,7 @@ class MultiQuadSlungLoad(BaseEnv):
         return M
 
     def observe(self, load_pos_des, load_att_des):
-        obs = [np.array(rot.cartesian2spherical(link.uvec.state))[1::]
+        obs = [np.array(rot.cart2sph2(link.uvec.state))[1::]
                for link in self.links.systems]
         load_pos = self.load.pos.state
         load_att = np.vstack(rot.dcm2angle(self.load.dcm.state.T))[::-1]
@@ -372,7 +375,7 @@ class MultiQuadSlungLoad(BaseEnv):
             r = -np.transpose(error).dot(
                 self.cfg.ddpg.P.dot(error)
             ).reshape(-1,)
-        r_scaled = r/(self.cfg.ddpg.reward_max/2)+1
+        r_scaled = (r/(self.cfg.ddpg.reward_max/2)+1)*10
         return r_scaled
 
     def transform_action2des(self, action, psi_des):
@@ -380,7 +383,7 @@ class MultiQuadSlungLoad(BaseEnv):
         quad_att_des = []
         for i in range(self.cfg.quad.num):
             chi, gamma = action[3*i+1:3*i+3]
-            u_des = rot.spherical2cartesian(1, chi, gamma)
+            u_des = rot.sph2cart2(1, chi, gamma)
             phi, theta = self.find_euler(u_des, psi_des[i])
             quad_att_des.append(np.vstack((phi, theta, psi_des[i])))
         return quad_att_des, f_des

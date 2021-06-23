@@ -122,14 +122,6 @@ class MultiQuadSlungLoad(BaseEnv):
         self.e3 = np.vstack((0., 0., 1.))
         self.eye = np.eye(3)
 
-        self.S1_set = deque(maxlen=cfg.quad.num)
-        self.S2_set = deque(maxlen=cfg.quad.num)
-        self.S3_set = deque(maxlen=cfg.quad.num)
-        self.S4_set = deque(maxlen=cfg.quad.num)
-        self.S5_set = deque(maxlen=cfg.quad.num)
-        self.S6_set = deque(maxlen=cfg.quad.num)
-        self.S7_set = deque(maxlen=cfg.quad.num)
-
         self.iscollision = False
 
     def reset(self, des, fixed_init=False):
@@ -151,6 +143,14 @@ class MultiQuadSlungLoad(BaseEnv):
         omega = self.load.omega.state
         omega_hat = hat(omega)
         omega_hat_square = omega_hat.dot(omega_hat)
+
+        S1_set = [None] * self.cfg.quad.num
+        S2_set = [None] * self.cfg.quad.num
+        S3_set = [None] * self.cfg.quad.num
+        S4_set = [None] * self.cfg.quad.num
+        S5_set = [None] * self.cfg.quad.num
+        S6_set = [None] * self.cfg.quad.num
+        S7_set = [None] * self.cfg.quad.num
 
         for i, (link, quad) in enumerate(
             zip(self.links.systems, self.quads.systems)
@@ -183,20 +183,20 @@ class MultiQuadSlungLoad(BaseEnv):
                 - m*l_w_square_q
             )
             S7_temp = m * rho_hat.dot(rho_hat)
-            self.S1_set.append(S1_temp)
-            self.S2_set.append(S2_temp)
-            self.S3_set.append(S3_temp)
-            self.S4_set.append(S4_temp)
-            self.S5_set.append(S5_temp)
-            self.S6_set.append(S6_temp)
-            self.S7_set.append(S7_temp)
-        S1 = sum(self.S1_set)
-        S2 = sum(self.S2_set)
-        S3 = sum(self.S3_set)
-        S4 = sum(self.S4_set)
-        S5 = sum(self.S5_set)
-        S6 = sum(self.S6_set)
-        S7 = sum(self.S7_set)
+            S1_set[i] = S1_temp
+            S2_set[i] = S2_temp
+            S3_set[i] = S3_temp
+            S4_set[i] = S4_temp
+            S5_set[i] = S5_temp
+            S6_set[i] = S6_temp
+            S7_set[i] = S7_temp
+        S1 = sum(S1_set)
+        S2 = sum(S2_set)
+        S3 = sum(S3_set)
+        S4 = sum(S4_set)
+        S5 = sum(S5_set)
+        S6 = sum(S6_set)
+        S7 = sum(S7_set)
 
         J_bar = self.load.J - S7
         J_hat = self.load.J + S3
@@ -210,6 +210,7 @@ class MultiQuadSlungLoad(BaseEnv):
         load_ang_acc = A.dot(load_acc) + B
         self.load.set_dot(load_acc, load_ang_acc)
 
+        M = [None]*self.cfg.quad.num
         for i, (link, quad) in enumerate(
                 zip(self.links.systems, self.quads.systems)
         ):
@@ -225,13 +226,15 @@ class MultiQuadSlungLoad(BaseEnv):
 
             link_ang_acc = q_hat.dot(load_acc + R0_omega_square_rho - D) / l
             link.set_dot(link_ang_acc)
-            M = self.control_attitude(
+            M[i] = self.control_attitude(
                 quad_att_des[i],
                 R,
                 quad.omega.state,
                 quad.J
             )
-            quad.set_dot(M)
+            quad.set_dot(M[i])
+
+        return dict(quad_att_des=quad_att_des, quad_moment=M, f_des=f_des)
 
     def step(self, action, des):
         # quad_att_des = 3*[np.vstack((np.pi/12., 0., 0.))]
@@ -239,10 +242,7 @@ class MultiQuadSlungLoad(BaseEnv):
         # f_des = 3*[25]
         load_pos_des, load_att_des, psi_des = des
         quad_att_des, f_des = self.transform_action2des(action, psi_des)
-        *_, time_out = self.update(
-            quad_att_des=quad_att_des,
-            f_des = f_des,
-        )
+        *_, time_out = self.update(quad_att_des=quad_att_des, f_des = f_des)
         done = self.terminate(time_out)
         obs = self.observe(load_pos_des, load_att_des)
         reward = self.get_reward(load_pos_des, load_att_des)
@@ -255,59 +255,53 @@ class MultiQuadSlungLoad(BaseEnv):
         }
         return obs, reward, done, info
 
-    def logger_callback(self, t, y, i, t_hist, ode_hist,
-                        quad_att_des, f_des):
-        states = self.observe_dict(y)
-        load = states['load']
-        links = states['links']
-        quads = states['quads']
-        M = [self.control_attitude(
-            quad_att_des[i],
-            states['quads'][f'quad{i:02d}']['dcm'],
-            states['quads'][f'quad{i:02d}']['omega'],
-            quad.J
-        ) for i, quad in enumerate(self.quads.systems)]
-        load_att = np.vstack(rot.dcm2angle(load['dcm'].T)[::-1])
-
-        quad_pos = []
-        quad_vel = []
-        quad_att = []
-        anchor_pos = []
-        # check_dynamics = []
-        for i, link in enumerate(self.links.systems):
-            quad_pos.append(
-                load['pos'] + load['dcm'].dot(link.anchor) \
-                - link.len*links[f'link{i:02d}']['uvec']
-            )
-            quad_vel.append(
-                load['vel'] \
-                + load['dcm'].dot(hat(load['omega']).dot(link.anchor)) \
-                - link.len*hat(links[f'link{i:02d}']['omega']).dot(
-                    links[f'link{i:02d}']['uvec']
+    def logger_callback(self, t, quad_att_des, f_des):
+        load_att = np.vstack(rot.dcm2angle(self.load.dcm.state.T)[::-1])
+        quad_pos = [None]*self.cfg.quad.num
+        quad_vel = [None]*self.cfg.quad.num
+        quad_att = [None]*self.cfg.quad.num
+        anchor_pos = [None]*self.cfg.quad.num
+        distance_btw_quad2anchor = [None]*self.cfg.quad.num
+        # check_dynamics = [None]*self.cfg.quad.num
+        for i, (link, quad) in enumerate(
+                zip(self.links.systems, self.quads.systems)
+        ):
+            quad_pos[i] = self.load.pos.state \
+                + self.load.dcm.state.dot(link.anchor) \
+                - link.len*link.uvec.state
+            quad_vel[i] = self.load.vel.state \
+                + self.load.dcm.state.dot(
+                    hat(self.load.omega.state).dot(link.anchor)
+                ) \
+                - link.len*hat(link.omega.state).dot(link.uvec.state)
+            quad_att[i] = np.array(rot.dcm2angle(quad.dcm.state.T))[::-1]
+            anchor_pos[i] = self.load.pos.state \
+                + self.load.dcm.state.dot(link.anchor)
+            distance_btw_quad2anchor[i] = \
+                np.sqrt(
+                    (quad_pos[i][0][0] - anchor_pos[i][0][0])**2 \
+                    + (quad_pos[i][1][0] - anchor_pos[i][1][0])**2 \
+                    + (quad_pos[i][2][0] - anchor_pos[i][2][0])**2
                 )
-            )
-            quad_att.append(
-                np.array(rot.dcm2angle(quads[f'quad{i:02d}']['dcm'].T))[::-1]
-            )
-            anchor_pos.append(load['pos'] + load['dcm'].dot(link.anchor))
-            # check_dynamics.append(np.dot(
+            # check_dynamics[i] = np.dot(
             #     links[f'link{i:02d}']['uvec'].reshape(-1, ),
             #     links[f'link{i:02d}']['omega'].reshape(-1,)
             # )
-            #                       )
         distance_btw_quads = self.check_collision(quad_pos)
-        distance_btw_quad2anchor = [nla.norm(quad_pos[i]-anchor_pos[i])
-                    for i in range(self.cfg.quad.num)]
-        return dict(time=t, **states, load_att=load_att, quad_moment=M,
-                    quad_att_des=quad_att_des, quad_pos=quad_pos,
-                    quad_vel=quad_vel, quad_att=quad_att,
-                    anchor_pos=anchor_pos,
+        return dict(time=t, **self.observe_dict(), load_att=load_att,
+                    anchor_pos=anchor_pos, quad_vel=quad_vel,
+                    quad_att=quad_att, quad_pos=quad_pos,
                     distance_btw_quads=distance_btw_quads,
                     distance_btw_quad2anchor=distance_btw_quad2anchor)
 
     def check_collision(self, quads_pos):
-        distance = [nla.norm(quads_pos[i-1]-quads_pos[i])
-                      for i in range(self.cfg.quad.num)]
+        distance = [
+            np.sqrt(
+                (quads_pos[i-1][0][0]-quads_pos[i][0][0])**2 \
+                    + (quads_pos[i-1][1][0]-quads_pos[i][1][0])**2 \
+                    + (quads_pos[i-1][2][0]-quads_pos[i][2][0])**2
+            ) for i in range(self.cfg.quad.num)
+        ]
         if not self.iscollision and any(
             i < self.cfg.quad.iscollision for i in distance
         ):
@@ -379,13 +373,14 @@ class MultiQuadSlungLoad(BaseEnv):
         return r_scaled
 
     def transform_action2des(self, action, psi_des):
-        f_des = [action[3*i] for i in range(self.cfg.quad.num)]
-        quad_att_des = []
+        f_des = [None]*self.cfg.quad.num
+        quad_att_des = [None]*self.cfg.quad.num
         for i in range(self.cfg.quad.num):
             chi, gamma = action[3*i+1:3*i+3]
             u_des = rot.sph2cart2(1, chi, gamma)
             phi, theta = self.find_euler(u_des, psi_des[i])
-            quad_att_des.append(np.vstack((phi, theta, psi_des[i])))
+            quad_att_des[i] = np.vstack((phi, theta, psi_des[i]))
+            f_des[i] = action[3*i]
         return quad_att_des, f_des
 
     # def transform_des2action(self, quad_att_des, f_des, psi_des):

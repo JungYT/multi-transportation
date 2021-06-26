@@ -53,8 +53,18 @@ def hat(v):
         [-v2, v1, 0]
     ])
 
+def unhat(R):
+    return np.vstack((R[1][0], R[0][2], R[2][1]))
+
 def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi
+
+def block_diag(R, num):
+    rows, cols = R.shape
+    result = np.zeros((num, rows, num, cols), dtype=R.dtype)
+    diag = np.einsum('ijik->ijk', result)
+    diag[:] = R
+    return result.reshape(rows * num, cols * num)
 
 def split_int(num):
     num_sqrt = np.sqrt(num)

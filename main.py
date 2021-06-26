@@ -78,6 +78,10 @@ def load_config():
     cfg.controller.Ks = 80.
     cfg.controller.chattering_bound = 0.5
     cfg.controller.unc_max = 0.1
+    cfg.controller.Kpos = 5.
+    cfg.controller.Kvel = 5.
+    cfg.controller.Kdcm = 5.
+    cfg.controller.Komega = 5.
 
     cfg.ddpg = SN()
     cfg.ddpg.P = np.diag([1., 1., 1., 5., 5., 2.])

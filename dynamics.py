@@ -144,7 +144,7 @@ class MultiQuadSlungLoad(BaseEnv):
         obs = self.observe(load_pos_des, load_att_des)
         return obs
 
-    def set_dot(self, t, load_pos_des, load_dcm_des):
+    def set_dot(self, t, quad_att_des, f_des):
         m_T = self.load.mass
         R0 = self.load.dcm.state
         omega = self.load.omega.state
@@ -159,32 +159,12 @@ class MultiQuadSlungLoad(BaseEnv):
         S6_set = [None] * self.cfg.quad.num
         S7_set = [None] * self.cfg.quad.num
 
-        load_pos = self.load.pos.state
-        load_vel = self.load.vel.state
+        # load_pos = self.load.pos.state
+        # load_vel = self.load.vel.state
 
-        F_d, M_d = self.design_desired_FM(load_pos_des, load_dcm_des, load_pos,
-                                          R0, omega, load_vel)
-        tension_des = self.calculate_desired_tension(F_d, M_d, R0)
-
-        # for i, (link, quad) in enumerate(
-        #     zip(self.links.systems, self.quads.systems)
-        # ):
-        #     l = link.len
-        #     rho = link.anchor
-        #     q = link.uvec.state
-        #     w = link.omega.state
-        #     m = quad.mass
-        #     R = quad.dcm.state
-        #     w_norm = np.sqrt(w[0]**2 + w[1]**2 + w[2]**2)
-
-        #     mu_des = tension_des[3*i:3*(i+1)]
-        #     mu = (q.dot(q.transpose())).dot(mu_des)
-        #     q_des = -mu_des/np.sqrt(mu_des[0]**2 + mu_des[1]**2 + mu_des[2]**2)
-
-        #     # anchor_acc = self.load.vel.dot - self.g + R0.dot(
-
-        #     u_parallel = mu + m*l*w_norm*w_norm*q \
-        #         + m*(q.dot(q.transpose()).dot(anchor_acc))
+        # F_d, M_d = self.design_desired_FM(load_pos_des, load_dcm_des, load_pos,
+        #                                   R0, omega, load_vel)
+        # tension_des = self.calculate_desired_tension(F_d, M_d, R0)
 
 
 
@@ -197,7 +177,7 @@ class MultiQuadSlungLoad(BaseEnv):
             w = link.omega.state
             m = quad.mass
             R = quad.dcm.state
-            # u = f_des[i] * R.dot(self.e3)
+            u = f_des[i] * R.dot(self.e3)
 
             m_T += m
             q_hat_square = (hat(q)).dot(hat(q))
@@ -208,21 +188,18 @@ class MultiQuadSlungLoad(BaseEnv):
             l_w_square_q = l * w_norm * w_norm * q
             R0_omega_square_rho = R0.dot(omega_hat_square.dot(rho))
 
-            mu_des = tension_des[3*i:3*(i+1)]
-            mu = (q.dot(q.transpose())).dot(mu_des)
-            anchor_acc = self.load.vel.dot - self.g + R0_omega_square_rho \
-                - R0.dot(hat(rho).dot(self.load.omega.dot))
+            # mu_des = tension_des[3*i:3*(i+1)]
+            # mu = (q.dot(q.transpose())).dot(mu_des)
+            # anchor_acc = self.load.vel.dot - self.g + R0_omega_square_rho \
+            #     - R0.dot(hat(rho).dot(self.load.omega.dot))
 
-            u_parallel = mu + m*l*w_norm*w_norm*q \
-                + m*(q.dot(q.transpose()).dot(anchor_acc))
+            # u_parallel = mu + m*l*w_norm*w_norm*q \
+            #     + m*(q.dot(q.transpose()).dot(anchor_acc))
 
-            q_des = -mu_des/np.sqrt(mu_des[0]**2 + mu_des[1]**2 + mu_des[2]**2)
-            w_des = q_des
-            e_q = hat(q_des).dot(q)
+            # q_des = -mu_des/np.sqrt(mu_des[0]**2 + mu_des[1]**2 + mu_des[2]**2)
+            # w_des = q_des
+            # e_q = hat(q_des).dot(q)
             # e_w = w + q_hat_square.dot(
-
-
-
 
             S1_temp = q_qT.dot(u - m*R0_omega_square_rho) - m*l_w_square_q
             S2_temp = m * q_qT.dot(rhohat_R0T.T)
@@ -294,9 +271,9 @@ class MultiQuadSlungLoad(BaseEnv):
         # f_des = 3*[25]
         load_pos_des, load_att_des, psi_des = des
         quad_att_des, f_des = self.transform_action2des(action, psi_des)
-        # *_, time_out = self.update(quad_att_des=quad_att_des, f_des = f_des)
-        *_, time_out = self.update(load_pos_des=np.vstack((0., 0., 0.)),
-                                   load_dcm_des = np.eye(3))
+        *_, time_out = self.update(quad_att_des=quad_att_des, f_des = f_des)
+        # *_, time_out = self.update(load_pos_des=np.vstack((0., 0., 0.)),
+        #                            load_dcm_des = np.eye(3))
         done = self.terminate(time_out)
         obs = self.observe(load_pos_des, load_att_des)
         reward = self.get_reward(load_pos_des, load_att_des)
@@ -372,16 +349,11 @@ class MultiQuadSlungLoad(BaseEnv):
         )
         return tension_des
 
-    # def design_parallel_input(self, tension_des_parallel): 
-    #     u_parallel = tension_des_parallel + 
-
     def design_control_input(self, load_pos_des, load_dcm_des, load_pos,
                              load_dcm, load_omega, load_vel, link_uvec):
         F_d, M_d = self.design_desired_FM(load_pos_des, load_dcm_des, load_pos,
                                           load_dcm, load_omega, load_vel)
         tension_des = self.calculate_desired_tension(F_d, M_d, load_dcm)
-
-
 
 
     def check_collision(self, quads_pos):

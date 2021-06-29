@@ -66,29 +66,31 @@ def split_int(num):
         result = [int(num_sqrt)+1, int(num_sqrt)+1]
     return result
 
-def draw_plot(path_data, path_fig):
-    data, info = logging.load(path_data, with_info=True)
+def draw_plot(dir_env_data, dir_agent_data, dir_save):
+    env_data, info = logging.load(dir_env_data, with_info=True)
+    agent_data = logging.load(dir_agent_data)
     cfg = info['cfg']
 
-    time = data['time']
-    load_pos = data['load']['pos']
-    load_vel = data['load']['vel']
+    time = env_data['time']
+    load_pos = env_data['load']['pos']
+    load_vel = env_data['load']['vel']
     # load_dcm = data['load']['dcm']
-    load_att = np.unwrap(data['load_att'], axis=0) * 180/np.pi
-    load_omega = np.unwrap(data['load']['omega'], axis=0) * 180/np.pi
-    quad_moment = data['quad_moment']
-    quad_pos = data['quad_pos']
-    quad_vel = data['quad_vel']
-    quad_att = np.unwrap(data['quad_att'], axis=0) * 180/np.pi
-    quad_att_des = np.unwrap(data['quad_att_des'], axis=0) * 180/np.pi
-    distance_btw_quads = data['distance_btw_quads']
-    distance_btw_quad2anchor = data['distance_btw_quad2anchor']
+    load_att = np.unwrap(env_data['load_att'], axis=0) * 180/np.pi
+    load_omega = np.unwrap(env_data['load']['omega'], axis=0) * 180/np.pi
+    quad_moment = env_data['quad_moment']
+    quad_pos = env_data['quad_pos']
+    quad_vel = env_data['quad_vel']
+    quad_att = np.unwrap(env_data['quad_att'], axis=0) * 180/np.pi
+    quad_att_des = np.unwrap(env_data['quad_att_des'], axis=0) * 180/np.pi
+    distance_btw_quads = env_data['distance_btw_quads']
+    distance_btw_quad2anchor = env_data['distance_btw_quad2anchor']
 
-    time_agent = data['agent']['time']
-    action = data['agent']['action']
-    reward = data['agent']['reward']
-    # anchor_pos = data['anchor_pos']
-    # check_dynamics = data['check_dynamics']
+    time_agent = agent_data['time']
+    action = agent_data['action']
+    reward = agent_data['reward']
+    # anchor_pos = env_data['anchor_pos']
+    # check_dynamics = env_data['check_dynamics']
+    # breakpoint()
 
     for i in range(cfg.quad.num):
         fig, ax = plt.subplots(nrows=3, ncols=1)
@@ -105,7 +107,7 @@ def draw_plot(path_data, path_fig):
         [ax[i].grid(True) for i in range(3)]
         fig.align_ylabels(ax)
         fig.savefig(
-            Path(path_fig, f"quad_{i}_pos.png"),
+            Path(dir_save, f"quad_{i}_pos.png"),
             bbox_inches='tight'
         )
         plt.close('all')
@@ -124,7 +126,7 @@ def draw_plot(path_data, path_fig):
         [ax[i].grid(True) for i in range(3)]
         fig.align_ylabels(ax)
         fig.savefig(
-            Path(path_fig, f"quad_{i}_vel.png"),
+            Path(dir_save, f"quad_{i}_vel.png"),
             bbox_inches='tight'
         )
         plt.close('all')
@@ -143,7 +145,7 @@ def draw_plot(path_data, path_fig):
         [ax[i].grid(True) for i in range(3)]
         fig.align_ylabels(ax)
         fig.savefig(
-            Path(path_fig, f"quad_{i}_moment.png"),
+            Path(dir_save, f"quad_{i}_moment.png"),
             bbox_inches='tight'
         )
         plt.close('all')
@@ -166,15 +168,15 @@ def draw_plot(path_data, path_fig):
         [ax[i].grid(True) for i in range(3)]
         fig.align_ylabels(ax)
         fig.savefig(
-            Path(path_fig, f"quad_{i}_att.png"),
+            Path(dir_save, f"quad_{i}_att.png"),
             bbox_inches='tight'
         )
         plt.close('all')
 
         fig, ax = plt.subplots(nrows=3, ncols=1)
-        ax[0].plot(time, data['quads'][f'quad{i:02d}']['omega'][:,0,:])
-        ax[1].plot(time, data['quads'][f'quad{i:02d}']['omega'][:,1,:])
-        ax[2].plot(time, data['quads'][f'quad{i:02d}']['omega'][:,2,:])
+        ax[0].plot(time, env_data['quads'][f'quad{i:02d}']['omega'][:,0,:])
+        ax[1].plot(time, env_data['quads'][f'quad{i:02d}']['omega'][:,1,:])
+        ax[2].plot(time, env_data['quads'][f'quad{i:02d}']['omega'][:,2,:])
         ax[0].set_title(f"Angular velocity of Quadrotor {i}")
         ax[0].axes.xaxis.set_ticklabels([])
         ax[1].axes.xaxis.set_ticklabels([])
@@ -185,7 +187,7 @@ def draw_plot(path_data, path_fig):
         [ax[i].grid(True) for i in range(3)]
         fig.align_ylabels(ax)
         fig.savefig(
-            Path(path_fig, f"quad_{i}_omega.png"),
+            Path(dir_save, f"quad_{i}_omega.png"),
             bbox_inches='tight'
         )
         plt.close('all')
@@ -204,7 +206,7 @@ def draw_plot(path_data, path_fig):
         [ax[i].grid(True) for i in range(3)]
         fig.align_ylabels(ax)
         fig.savefig(
-            Path(path_fig, f"quad_{i}_action.png"),
+            Path(dir_save, f"quad_{i}_action.png"),
             bbox_inches='tight'
         )
         plt.close('all')
@@ -223,7 +225,7 @@ def draw_plot(path_data, path_fig):
     [ax[i].grid(True) for i in range(3)]
     fig.align_ylabels(ax)
     fig.savefig(
-        Path(path_fig, "load_pos.png"),
+        Path(dir_save, "load_pos.png"),
         bbox_inches='tight'
     )
     plt.close('all')
@@ -242,7 +244,7 @@ def draw_plot(path_data, path_fig):
     [ax[i].grid(True) for i in range(3)]
     fig.align_ylabels(ax)
     fig.savefig(
-        Path(path_fig, "load_vel.png"),
+        Path(dir_save, "load_vel.png"),
         bbox_inches='tight'
     )
     plt.close('all')
@@ -261,7 +263,7 @@ def draw_plot(path_data, path_fig):
     [ax[i].grid(True) for i in range(3)]
     fig.align_ylabels(ax)
     fig.savefig(
-        Path(path_fig, "load_att.png"),
+        Path(dir_save, "load_att.png"),
         bbox_inches='tight'
     )
     plt.close('all')
@@ -280,7 +282,7 @@ def draw_plot(path_data, path_fig):
     [ax[i].grid(True) for i in range(3)]
     fig.align_ylabels(ax)
     fig.savefig(
-        Path(path_fig, "load_omega.png"),
+        Path(dir_save, "load_omega.png"),
         bbox_inches='tight'
     )
     plt.close('all')
@@ -301,7 +303,7 @@ def draw_plot(path_data, path_fig):
      for i in range(cfg.quad.num)]
     fig.align_ylabels(ax)
     fig.savefig(
-        Path(path_fig, "distance_btw_quad2anchor.png"),
+        Path(dir_save, "distance_btw_quad2anchor.png"),
         bbox_inches='tight'
     )
     plt.close('all')
@@ -323,18 +325,15 @@ def draw_plot(path_data, path_fig):
     ax.set_xlabel("time [s]")
     ax.grid(True)
     fig.savefig(
-        Path(path_fig, "distance_btw_quads.png"),
+        Path(dir_save, "distance_btw_quads.png"),
         bbox_inches='tight'
     )
     plt.close('all')
 
-
-    # fig = plt.figure()
-    # plt.subplot(111, projection="3d")
     fig, _ = plt.subplots(1, 1, subplot_kw=dict(projection="3d"))
-    ani = Animator(fig, [data], cfg)
+    ani = Animator(fig, [env_data], cfg)
     ani.animate()
-    ani.save(Path(path_fig, "animation.mp4"))
+    ani.save(Path(dir_save, "animation.mp4"))
 
 
 class Quad_ani:
@@ -562,12 +561,19 @@ class Animator:
         self.anim.save(path, writer="ffmpeg", fps=30, *args, **kwargs)
 
 
-def compare_episode(file_list, path_save, ani=True):
-    data_list = [logging.load(file) for file in file_list]
-    _, info = logging.load(file_list[0], with_info=True)
+def compare_episode(past, ani=True):
+    dir_save = list(Path('log').glob("*"))[past]
+    epi_list = [x for x in dir_save.glob("*")]
+    env_data_list = [
+        logging.load(Path(epi_dir, "env_data.h5")) for epi_dir in epi_list
+    ]
+    agent_data_list = [
+        logging.load(Path(epi_dir, "agent_data.h5")) for epi_dir in epi_list
+    ]
+    _, info = logging.load(Path(epi_list[0], "env_data.h5"), with_info=True)
     cfg = info['cfg']
     if ani == True:
-        data_num = len(data_list)
+        data_num = len(env_data_list)
         fig_shape = split_int(data_num)
         simple = False
         if fig_shape[0] >= 3:
@@ -579,30 +585,30 @@ def compare_episode(file_list, path_save, ani=True):
             subplot_kw=dict(projection="3d"),
         )
 
-        ani = Animator(fig, data_list, cfg, simple=simple)
+        ani = Animator(fig, env_data_list, cfg, simple=simple)
         ani.animate()
-        ani.save(Path(path_save, "compare-animation.mp4"))
+        ani.save(Path(dir_save, "compare-animation.mp4"))
         plt.close('all')
 
     return_list = []
-    for i, data in enumerate(data_list):
+    for i, data in enumerate(agent_data_list):
         G = 0
-        for r in data['agent']['reward'][::-1]:
+        for r in data['reward'][::-1]:
             G = r.item() + cfg.ddpg.discount*G
         return_list.append([(i+1)*cfg.epi_eval, G])
     return_list = np.array(return_list)
 
     fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(return_list[:,0], return_list[:,1])
+    ax.plot(return_list[:,0], return_list[:,1], "*")
     ax.set_title("Return")
     ax.set_ylabel("Return")
     ax.set_xlabel("Episode")
     ax.grid(True)
     fig.savefig(
-        Path(path_save, "return.png"),
+        Path(dir_save, "return.png"),
         bbox_inches='tight'
     )
-    plt.close()
+    plt.close('all')
 
 
 

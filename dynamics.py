@@ -226,6 +226,7 @@ class MultiQuadSlungLoad(BaseEnv):
 
             link_ang_acc = q_hat.dot(load_acc + R0_omega_square_rho - D) / l
             link.set_dot(link_ang_acc)
+
             M[i] = self.control_attitude(
                 quad_att_des[i],
                 R,
@@ -247,11 +248,9 @@ class MultiQuadSlungLoad(BaseEnv):
         obs = self.observe(load_pos_des, load_att_des)
         reward = self.get_reward(load_pos_des, load_att_des)
         info = {
-            'agent': {
-                'time': self.clock.get(),
-                'reward': reward,
-                'action': action,
-            }
+            'time': self.clock.get(),
+            'reward': reward,
+            'action': action,
         }
         return obs, reward, done, info
 
@@ -283,6 +282,8 @@ class MultiQuadSlungLoad(BaseEnv):
                     + (quad_pos[i][1][0] - anchor_pos[i][1][0])**2 \
                     + (quad_pos[i][2][0] - anchor_pos[i][2][0])**2
                 )
+            if distance_btw_quad2anchor[i] < 0.1 or distance_btw_quad2anchor[i] > 1.:
+                print('problem!')
             # check_dynamics[i] = np.dot(
             #     links[f'link{i:02d}']['uvec'].reshape(-1, ),
             #     links[f'link{i:02d}']['omega'].reshape(-1,)
@@ -382,15 +383,6 @@ class MultiQuadSlungLoad(BaseEnv):
             quad_att_des[i] = np.vstack((phi, theta, psi_des[i]))
             f_des[i] = action[3*i]
         return quad_att_des, f_des
-
-    # def transform_des2action(self, quad_att_des, f_des, psi_des):
-    #     action = []
-    #     for i, att in enumerate(quad_att_des):
-    #         dcm = rot.angle2dcm(psi_des[i], att[i][1], att[i][0])
-    #         _, chi, gamma = rot.cartesian2spherical(
-    #             (dcm.T).dot(np.vstack((0., 0., 1.)))
-    #         )
-    #         action.append([f_des[i], chi, gamma])
 
     def find_euler(self, vec, psi):
         vec_n = rot.angle2dcm(psi, 0, 0).dot(vec)

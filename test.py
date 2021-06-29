@@ -22,283 +22,60 @@ from fym.utils import rot
 from utils import hat
 
 
-class Test(BaseEnv):
-    def __init__(self, a, b):
-        super().__init__(dt=0.1, max_t=5, solver="rk4")
-        #self.pos = BaseSystem(np.array([1, 2]))
-        #self.vel = BaseSystem(np.array([0, 3]))
-        self.pos = BaseSystem(np.vstack((1, 2)))
-        self.vel = BaseSystem(np.vstack((0, 3)))
-        self.a = a
-        self.b = b
+class TestSystem(BaseEnv):
+    def __init__(self):
+        super().__init__()
+        self.pos = BaseSystem(np.vstack((0., 0.)))
+        self.vel = BaseSystem(np.vstack((0., 0.)))
 
-    def set_dot(self, t):
-        pos = self.pos.state
-        vel = self.pos.state
-        self.pos.dot = vel
-        self.vel.dot = -self.a * vel - self.b * pos
+    def set_dot(self, u):
+        self.pos.dot = self.vel.state
+        self.vel.dot = np.vstack((u, -u))
+
+
+class TestEnv(BaseEnv):
+    def __init__(self):
+        super().__init__(dt=0.1, max_t=1, solver='odeint', ode_step_len=10)
+
+        self.sys = TestSystem()
 
     def reset(self):
         super().reset()
 
+    def set_dot(self, t, u):
+        self.sys.set_dot(u)
+        self.method_in_setdot(self.sys.pos.state, self.sys.vel.state)
+        self.method_not_in_setdot()
+
+    def method_in_setdot(self, pos, vel):
+        print('in setdot pos:', pos)
+        print('in setdot vel:', vel)
+
+    def method_not_in_setdot(self):
+        print('not in setdot pos:', self.sys.pos.state)
+        print('not in setdot pos:', self.sys.vel.state)
+
     def step(self):
-        *_, done = self.update()
-        info = {
-            'pos': self.pos.state,
-            'vel': self.vel.state,
-        }
-        return done, info
-
-    def logger_callback(self, i, t, y, *args):
-        return dict(time=t, pos=self.pos.state)
-
-class ActorNet(nn.Module):
-    def __init__(self):
-        super(ActorNet, self).__init__()
-        self.lin1 = nn.Linear(3, 64)
-        self.lin2 = nn.Linear(64, 32)
-        self.lin3 = nn.Linear(32, 16)
-        self.lin4 = nn.Linear(16, 3)
-        self.relu = nn.ReLU()
-        self.tanh = nn.Tanh()
-
-    def forward(self, x):
-        x1 = self.relu(self.lin1(x))
-        x2 = self.relu(self.lin2(x1))
-        x3 = self.relu(self.lin3(x2))
-        x4 = self.tanh(self.lin4(x3))
-        return x4
+        *_, done = self.update(u=1)
+        return done
 
 def main():
-    # memory = deque()
-    # x = np.array([1, 2, 3])
-    # temp = np.array([4, 5])
-    # item = (x, temp)
-    # actor = ActorNet()
-    # for i in range(10):
-    #     memory.append(item)
-    # x = np.vstack((1, 2, 3))
-    # state, action = zip(*memory)
-    # y = actor(torch.FloatTensor(x))
-    # env = Test(1, 2)
-    # env.logger = logging.Logger("temp.h5")
-    # env.reset()
-    # done, info = env.step()
-    # env.close()
-    # data = logging.load("temp.h5")
-    # breakpoint()
+    sys = TestEnv()
+    sys.reset()
+    while True:
+        done = sys.step()
+        if done:
+            break
+    sys.close()
 
-    ite = 1
-    start1 = time.time()
-    for k in range(ite):
-        a1 = [i + 100*np.sqrt(2) for i in range(3)]
-        b1 = [i + 100*np.sqrt(2) for i in range(3)]
-        c1 = [i + 100*np.sqrt(2) for i in range(3)]
-    end1 = time.time()
-    start2 = time.time()
-    for k in range(ite):
-        a = []
-        b = []
-        c = []
-        for i in range(3):
-            a.append(i + 100*np.sqrt(2))
-            b.append(i + 100*np.sqrt(2))
-            c.append(i + 100*np.sqrt(2))
-    end2 = time.time()
-
-    print("time1: :", end1 - start1)
-    print("time2: :", end2 - start2)
-
-
-
-def test():
-    fig = plt.figure()
-    ax = fig.gca(projection='3d')
-    ax.plot3D(1, 2, 3, marker="X")
-    plt.show()
-
-class Quad_ani:
-    def __init__(self, ax, quad_pos, dcm):
-        d = 0.315
-        r = 0.15
-
-        body_segs = np.array([
-            [[d, 0, 0], [0, 0, 0]],
-            [[-d, 0, 0], [0, 0, 0]],
-            [[0, d, 0], [0, 0, 0]],
-            [[0, -d, 0], [0, 0, 0]]
-        ])
-        colors = (
-            (1, 0, 0, 1),
-            (0, 0, 1, 1),
-            (0, 0, 1, 1),
-            (0, 0, 1, 1),
-        )
-        self.body = art3d.Line3DCollection(
-            body_segs,
-            colors=colors,
-            linewidths=3
-        )
-
-        kwargs = dict(radius=r, ec="k", fc="k", alpha=0.3)
-        self.rotors = [
-            Circle((d, 0), **kwargs),
-            Circle((0, d), **kwargs),
-            Circle((-d, 0), **kwargs),
-            Circle((0, -d), **kwargs),
-        ]
-
-        ax.add_collection3d(self.body)
-        for rotor in self.rotors:
-            ax.add_patch(rotor)
-            art3d.pathpatch_2d_to_3d(rotor, z=0)
-
-        self.body._base = self.body._segments3d
-        for rotor in self.rotors:
-            rotor._segment3d = np.array(rotor._segment3d)
-            rotor._center = np.array(rotor._center + (0,))
-            rotor._base = rotor._segment3d
-
-        self.set(quad_pos[0], dcm[0])
-
-    def set(self, pos, dcm=np.eye(3)):
-        self.body._segments3d = np.array([
-            dcm @ point for point in self.body._base.reshape(-1, 3)
-        ]).reshape(self.body._base.shape)
-
-        for rotor in self.rotors:
-            rotor._segment3d = np.array([
-                dcm @ point for point in rotor._base
-            ])
-
-        self.body._segments3d += pos
-        for rotor in self.rotors:
-            rotor._segment3d += pos
-
-
-class Animator:
-    def __init__(self, fig, data_set):
-        self.offsets = ['collections', 'patches', 'lines', 'texts',
-                        'artists', 'images']
-        self.fig = fig
-        self.axes = fig.axes
-        self.data_set = data_set
-        self.quad_pos = data_set['quad']
-        self.dcm = data_set['dcm']
-
-    def init(self):
-        self.frame_artists = []
-
-        for ax in self.axes:
-            ax.quad = Quad_ani(ax, self.quad_pos, self.dcm)
-            ax.set_xlim3d([-1, 1])
-            ax.set_ylim3d([-1, 1])
-            ax.set_zlim3d([-1, 1])
-            ax.set_xlabel('x')
-            ax.set_ylabel('y')
-            ax.set_zlabel('z')
-
-            for name in self.offsets:
-                self.frame_artists += getattr(ax, name)
-
-        return self.frame_artists
-
-    def get_sample(self):
-        self.init()
-        self.update(0)
-        self.fig.show()
-
-    def update(self, frame):
-        for data, ax in zip(self.data_set, self.axes):
-            pos = data
-            R
-            ax.quad.set(pos, R)
-        return self.frame_artists
-
-    def animate(self, *args, **kwargs):
-        frames = range(0, 1000, 10)
-        self.anim = FuncAnimation(
-            self.fig, self.update, init_func=self.init,
-            frames=frames, interval=10, blit=True,
-            *args, **kwargs
-        )
-
-
-
-def Animator():
-
-        # segments = [[d, 0, 0], [-d, 0, 0], [0, d, 0], [0, -d, 0]]
-        # rotor_pos = [dcm@seg + pos for seg in segments]
-        # body_segs = np.array([[rotor_pos[i], pos] for i in range(4)])
-
-        # for i, rotor in enumerate(rotors):
-        #     ax.add_patch(rotor)
-        #     pathpatch_2d_to_3d(rotor, z=rotor_pos[i][2], dcm=dcm)
-            # pathpatch_2d_to_3d(rotor, z=0, dcm=dcm)
-
-        fig = plt.figure()
-        ax = ax3d.Axes3D(fig)
-        ax.set_xlim3d([-1, 1])
-        ax.set_xlabel('x')
-        ax.set_ylim3d([-1, 1])
-        ax.set_ylabel('y')
-        ax.set_zlim3d([-1, 1])
-        ax.set_zlabel('z')
-        quad_ani = Quad_ani(ax)
-        # quad_ani.set(np.array([0, 0, 0]), np.eye(3))
-        quad_ani.set(np.array([0, 0, 0]), rot.angle2dcm(0, np.pi/3, 0).T)
-
-        breakpoint()
-
-    # quad_ani(np.array((0, 0, 0)), rot.angle2dcm(0, np.pi/3, 0).T)
-
-def findDCM(a):
-    theta = np.arcsin(-a[0]).item()
-    phi = np.arcsin(a[1]/np.cos(theta)).item()
-    # a = a.reshape(-1,) / nla.norm(a)
-    # b = b.reshape(-1,) / nla.norm(b)
-    # v = np.cross(a, b)
-    # s = nla.norm(v)
-    # c = np.dot(a, b)
-    # R = np.eye(3) + hat(v) + hat(v).dot(hat(v)) / (1+c)
-    return phi, theta
-
-def findDCM2(a):
-    phi = np.arctan2(a[1], a[2]).item()
-    theta = np.arcsin(-a[0]).item()
-    return phi, theta
-
-def findDCM3(a, yaw):
-    b = rot.angle2dcm(yaw, 0, 0).dot(a)
-    theta = np.arctan2(b[0], b[2]).item()
-    phi = np.arctan2(-b[1]*b[2], np.cos(theta)*(1-b[1]**2)).item()
-    return phi, theta
 
 if __name__ == "__main__":
-    a = np.vstack((0., 0., 1.))
-    b = rot.spherical2cartesian(1, -np.pi/4, np.pi/4)
-    yaw = 0
-    phi, theta = findDCM(b)
-    c = rot.angle2dcm(yaw, theta, phi).dot(b)
-    phi2, theta2 = findDCM2(b)
-    c2 = rot.angle2dcm(yaw, theta2, phi2).dot(b)
-    phi3, theta3 = findDCM3(b, yaw)
-    c3 = rot.angle2dcm(yaw, theta3, phi3).dot(b)
-    # print(b-c)
-    # print(b-c2)
-    if not np.isclose(a-c, np.vstack((0., 0., 0.))).any():
-        print('dcm1 is diff')
-    if not np.isclose(a-c2, np.vstack((0., 0., 0.))).any():
-        print('dcm2 is diff')
-    if not np.isclose(a-c3, np.vstack((0., 0., 0.))).any():
-        print('dcm3 is diff')
-    breakpoint()
+    main()
 
-    # print(np.isclose(b-c, np.vstack((0., 0., 0.))))
-    # print(np.isclose(b-c2, np.vstack((0., 0., 0.))))
 
-    # t1 = timeit.timeit('findDCM()', setup='from __main__ import findDCM')
-    # t2 = timeit.timeit('findDCM2()', setup='from __main__ import findDCM2')
-    # print(t1)
-    # print(t2)
+
+
+
+
+
 

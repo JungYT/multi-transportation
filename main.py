@@ -275,31 +275,18 @@ def main():
         cfg.dt,
         cfg.ddpg.action_dim
     )
-    load_pos_des = cfg.load.pos_des
-    load_att_des = cfg.load.att_des
-    psi_des = cfg.quad.psi_des
-    des = [load_pos_des, load_att_des, psi_des]
+    des = [cfg.load.pos_des, cfg.load_att_des, cfg.quad.psi_des]
 
     for epi_num in tqdm(range(cfg.epi_train)):
         train(agent, des, cfg, noise, env)
+
         if (epi_num+1) % cfg.epi_eval == 0:
-            # Path(cfg.dir, f"epi_{epi_num+1:05d}").mkdir(
-            #     parents=True,
-            #     exist_ok=True
-            # )
             dir_save = Path(cfg.dir, f"epi_after_{epi_num+1:05d}")
             dir_env_data = Path(dir_save, "env_data.h5")
             dir_agent_data = Path(dir_save, "agent_data.h5")
             dir_agent_params = Path(dir_save, "agent_params.h5")
 
-            evaluate(
-                env,
-                agent,
-                des,
-                cfg,
-                dir_env_data,
-                dir_agent_data,
-            )
+            evaluate(env, agent, des, cfg, dir_env_data, dir_agent_data)
             draw_plot(dir_env_data, dir_agent_data, dir_save)
             agent.save_parameters(dir_agent_params)
     env.close()
@@ -310,6 +297,7 @@ if __name__ == "__main__":
 
     past = -1
     compare_episode(past, ani=True)
+
     plt.close('all')
 
 

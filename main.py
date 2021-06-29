@@ -275,7 +275,7 @@ def main():
         cfg.dt,
         cfg.ddpg.action_dim
     )
-    des = [cfg.load.pos_des, cfg.load_att_des, cfg.quad.psi_des]
+    des = [cfg.load.pos_des, cfg.load.att_des, cfg.quad.psi_des]
 
     for epi_num in tqdm(range(cfg.epi_train)):
         train(agent, des, cfg, noise, env)

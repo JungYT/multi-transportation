@@ -94,15 +94,37 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
     quad_att_des = np.unwrap(env_data['quad_att_des'], axis=0) * 180/np.pi
     distance_btw_quads = env_data['distance_btw_quads']
     distance_btw_quad2anchor = env_data['distance_btw_quad2anchor']
+    link = env_data['links']
 
     time_agent = agent_data['time']
     action = agent_data['action']
     reward = agent_data['reward']
+    tension = agent_data['tension']
+    tension_des = agent_data['tension_des']
     # anchor_pos = env_data['anchor_pos']
     # check_dynamics = env_data['check_dynamics']
     # breakpoint()
 
     for i in range(cfg.quad.num):
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time, link[f"link{i:02d}"]['omega'][:,0,0])
+        ax[1].plot(time, link[f"link{i:02d}"]['omega'][:,1,0])
+        ax[2].plot(time, link[f"link{i:02d}"]['omega'][:,2,0])
+        ax[0].set_title(f"Angular velocity of link {i}")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[0].set_ylabel("$\omega_x$ [rad/s]")
+        ax[1].set_ylabel("$\omega_y$ [rad/s]")
+        ax[2].set_ylabel("$\omega_z$ [rad/s]")
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(
+            Path(dir_save, f"link_{i}_omega.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
+
         fig, ax = plt.subplots(nrows=3, ncols=1)
         ax[0].plot(time, quad_pos[:,i,0])
         ax[1].plot(time, quad_pos[:,i,1])
@@ -203,9 +225,9 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
         plt.close('all')
 
         fig, ax = plt.subplots(nrows=3, ncols=1)
-        ax[0].plot(time_agent, action[:,cfg.quad.num*i])
-        ax[1].plot(time_agent, action[:,cfg.quad.num*i+1]*180/np.pi)
-        ax[2].plot(time_agent, action[:,cfg.quad.num*i+2]*180/np.pi)
+        ax[0].plot(time_agent, action[:,i,0])
+        ax[1].plot(time_agent, action[:,i,1]*180/np.pi)
+        ax[2].plot(time_agent, action[:,i,2]*180/np.pi)
         ax[0].set_title(f"Action of Quadrotor {i}")
         ax[0].axes.xaxis.set_ticklabels([])
         ax[1].axes.xaxis.set_ticklabels([])
@@ -217,6 +239,29 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
         fig.align_ylabels(ax)
         fig.savefig(
             Path(dir_save, f"quad_{i}_action.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        line1, = ax[0].plot(time_agent, tension[:,i,0], 'r')
+        line2, = ax[0].plot(time_agent, tension_des[:,i,0], 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('estimates', 'des.'))
+        ax[1].plot(time_agent, tension[:,i,1], 'r',
+                   time_agent, tension_des[:,i,1], 'b--')
+        ax[2].plot(time_agent, tension[:,i,2], 'r',
+                   time_agent, tension_des[:,i,2], 'b--')
+        ax[0].set_title(f"Desired tension and estimates of Quadrotor {i}")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[0].set_ylabel("X [N]")
+        ax[1].set_ylabel("Y [N]")
+        ax[2].set_ylabel("Z [N]")
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(
+            Path(dir_save, f"quad_{i}_tension.png"),
             bbox_inches='tight'
         )
         plt.close('all')
@@ -560,7 +605,9 @@ class Animator:
         return self.frame_artists
 
     def animate(self, *args, **kwargs):
-        frames = range(0, len(self.data_list[0]['time']), 10)
+        data_len = [len(self.data_list[i]['time'])
+                    for i in range(self.len)]
+        frames = range(0, min(data_len), 10)
         self.anim = FuncAnimation(
             self.fig, self.update, init_func=self.init,
             frames=frames, interval=200, blit=True,
@@ -602,23 +649,29 @@ def compare_episode(past, ani=True):
 
     return_list = []
     for i, data in enumerate(agent_data_list):
-        G = 0
+        G = [0]*cfg.quad.num
         for r in data['reward'][::-1]:
-            G = r.item() + cfg.ddpg.discount*G
-        return_list.append([(i+1)*cfg.epi_eval, G])
+            for j in range(cfg.quad.num):
+                G[j] = r[j].item() + cfg.ddpg.discount*G[j]
+            # G = r.item() + cfg.ddpg.discount*G
+        return_list_tmp = [(i+1)*cfg.epi_eval]
+        for j in range(cfg.quad.num):
+            return_list_tmp.append(G[j])
+        return_list.append(return_list_tmp)
     return_list = np.array(return_list)
 
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(return_list[:,0], return_list[:,1], "*")
-    ax.set_title("Return")
-    ax.set_ylabel("Return")
-    ax.set_xlabel("Episode")
-    ax.grid(True)
-    fig.savefig(
-        Path(dir_save, "return.png"),
-        bbox_inches='tight'
-    )
-    plt.close('all')
+    for i in range(cfg.quad.num):
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(return_list[:,0], return_list[:,i+1], "*")
+        ax.set_title(f"Return for {i}th quadrotor")
+        ax.set_ylabel("Return")
+        ax.set_xlabel("Episode")
+        ax.grid(True)
+        fig.savefig(
+            Path(dir_save, f"return_quad_{i}.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
 
 
 

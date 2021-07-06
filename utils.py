@@ -5,6 +5,8 @@ from matplotlib.animation import FuncAnimation
 import mpl_toolkits.mplot3d.art3d as art3d
 import mpl_toolkits.mplot3d.axes3d as axes3d
 from matplotlib.patches import Circle
+import os
+from glob import glob
 
 import fym.logging as logging
 from fym.utils import rot
@@ -39,6 +41,7 @@ def softupdate(target, behavior, softupdate_const):
         )
 
 def hardupdate(target, behavior):
+    target.load_state_dict(behavior.state_dict())
     for targetParam, behaviorParam in zip(
             target.parameters(),
             behavior.parameters()
@@ -101,9 +104,7 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
     reward = agent_data['reward']
     tension = agent_data['tension']
     tension_des = agent_data['tension_des']
-    # anchor_pos = env_data['anchor_pos']
-    # check_dynamics = env_data['check_dynamics']
-    # breakpoint()
+    error = agent_data['error']
 
     for i in range(cfg.quad.num):
         fig, ax = plt.subplots(nrows=3, ncols=1)
@@ -265,6 +266,25 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
             bbox_inches='tight'
         )
         plt.close('all')
+
+    # fig, ax = plt.subplots(nrows=3, ncols=1)
+    # ax[0].plot(time_agent, reward[:,0,0])
+    # ax[1].plot(time_agent, reward[:,1,0])
+    # ax[2].plot(time_agent, reward[:,2,0])
+    # ax[0].set_title(f"Reward History of Quadrotors")
+    # ax[0].axes.xaxis.set_ticklabels([])
+    # ax[1].axes.xaxis.set_ticklabels([])
+    # ax[0].set_ylabel("Quad 1")
+    # ax[1].set_ylabel("Quad 2")
+    # ax[2].set_ylabel("Quad 2")
+    # ax[2].set_xlabel("time [s]")
+    # [ax[i].grid(True) for i in range(3)]
+    # fig.align_ylabels(ax)
+    # fig.savefig(
+    #     Path(dir_save, f"reward history.png"),
+    #     bbox_inches='tight'
+    # )
+    # plt.close('all')
 
     fig, ax = plt.subplots(nrows=3, ncols=1)
     ax[0].plot(time, load_pos[:,0])
@@ -620,7 +640,8 @@ class Animator:
 
 def compare_episode(past, ani=True):
     dir_save = list(Path('log').glob("*"))[past]
-    epi_list = [x for x in dir_save.glob("*")]
+    # epi_list = [x for x in dir_save.glob("* ")]
+    epi_list = glob(os.path.join(dir_save, "*", ""))
     env_data_list = [
         logging.load(Path(epi_dir, "env_data.h5")) for epi_dir in epi_list
     ]

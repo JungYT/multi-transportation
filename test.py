@@ -60,6 +60,16 @@ class TestEnv(BaseEnv):
         return done
 
 def main():
+    lin1 = nn.Linear(4, 16)
+    lin2 = nn.Linear(16, 4)
+    lin3 = nn.Linear(4, 3)
+    relu = nn.ReLU()
+    bn1 = nn.BatchNorm1d(16)
+    bn2 = nn.BatchNorm1d(4)
+    bn_model = nn.Sequential(lin1, bn1, relu, lin2, bn2, relu, lin3)
+    x = np.array([1, 2, 3, 4])
+    breakpoint()
+
     sys = TestEnv()
     sys.reset()
     while True:

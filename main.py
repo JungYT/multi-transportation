@@ -23,8 +23,8 @@ random.seed(0)
 
 def load_config():
     cfg = SN()
-    cfg.epi_train = 5000
-    cfg.epi_eval = 200
+    cfg.epi_train = 1
+    cfg.epi_eval = 1
     cfg.dt = 0.1
     cfg.max_t = 3.
     cfg.solver = 'odeint'
@@ -270,28 +270,30 @@ class DDPG:
 
 
 def train(agent, des, cfg, noise, env):
-    agent.set_train_mode()
     x = env.reset()
-    # x = env.reset(fixed_init=True)
     noise.reset()
+    action = [None]*cfg.quad.num
     while True:
+        agent.set_eval_mode()
         # noise_set = np.array([
         #     noise.get_noise(),
         #     noise.get_noise(),
         #     noise.get_noise()
         # ])
-        noise_set = np.array([
-            np.random.normal(size=3),
-            np.random.normal(scale=0.1, size=3),
-            np.random.normal(scale=0.03, size=3)
-        ])
-        action = np.clip(
-            agent.get_action(x) + noise_set,
-            -cfg.ddpg.action_scaling.detach().numpy() \
-            + cfg.ddpg.action_bias.detach().numpy(),
-            cfg.ddpg.action_scaling.detach().numpy() \
-            + cfg.ddpg.action_bias.detach().numpy()
-        )
+        for i in range(cfg.quad.num):
+            noise = np.array([
+                np.random.normal(),
+                np.random.normal(scale=0.1),
+                np.random.normal(scale=0.03)
+            ])
+            action[i] = np.clip(
+                agent.get_action(x[i]) + noise,
+                -cfg.ddpg.action_scaling.detach().numpy() \
+                + cfg.ddpg.action_bias.detach().numpy(),
+                cfg.ddpg.action_scaling.detach().numpy() \
+                + cfg.ddpg.action_bias.detach().numpy()
+            )
+
         xn, r, done, _ = env.step(action, des)
         for i in range(cfg.quad.num):
             item = (x[i], action[i], r[i], xn[i], done)
@@ -299,6 +301,7 @@ def train(agent, des, cfg, noise, env):
         # agent.memorize((x, action, r, xn, done))
         x = xn
         if len(agent.memory) > 5 * cfg.ddpg.batch_size:
+            agent.set_train_mode()
             agent.train()
         if done:
             break
@@ -311,8 +314,10 @@ def evaluate(env, agent, des, cfg, dir_env_data, dir_agent_data):
     env.logger.set_info(cfg=cfg)
     logger_agent = logging.Logger(dir_agent_data)
     x = env.reset(fixed_init=True)
+    action = [None] * cfg.quad.num
     while True:
-        action = agent.get_action(x)
+        for i in range(cfg.quad.num):
+            action[i] = agent.get_action(x[i])
         xn, _, done, info = env.step(action, des)
         logger_agent.record(**info)
         x = xn

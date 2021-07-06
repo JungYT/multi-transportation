@@ -378,7 +378,7 @@ class MultiQuadSlungLoad(BaseEnv):
                 np.array([azi, polar]),
                 link.uvec.dot.reshape(-1,),
                 u.reshape(-1,)
-            ])
+            ]).reshape(1,-1)
 
         return obs
 

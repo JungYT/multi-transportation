@@ -8,47 +8,21 @@ which means the dcm should be transposed to use ``rot.angle2dcm`` package.
 """
 import numpy as np
 import numpy.linalg as nla
+import numpy.random as random
 from collections import deque
 
 from fym.core import BaseEnv, BaseSystem
 import fym.core as core
 from fym.utils import rot
-from utils import hat
+from utils import hat, unhat, block_diag
 
-# np.random.seed(0)
 
 class Load(BaseEnv):
-    def __init__(self, pos_bound, att_bound, mass, J):
+    def __init__(self, mass, J):
         super().__init__()
-        self.pos = BaseSystem(np.vstack((
-            np.random.uniform(
-                low=pos_bound[0][0],
-                high=pos_bound[0][1]
-            ),
-            np.random.uniform(
-                low=pos_bound[1][0],
-                high=pos_bound[1][1]
-            ),
-            np.random.uniform(
-                low=pos_bound[2][0],
-                high=pos_bound[2][1]
-            )
-        )))
+        self.pos = BaseSystem(np.vstack((0., 0., 3.)))
         self.vel = BaseSystem(np.vstack((0., 0., 0.)))
-        self.dcm = BaseSystem(rot.angle2dcm(
-            np.random.uniform(
-                low=att_bound[2][0],
-                high=att_bound[2][1]
-            ),
-            np.random.uniform(
-                low=att_bound[1][0],
-                high=att_bound[1][1]
-            ),
-            np.random.uniform(
-                low=att_bound[0][0],
-                high=att_bound[0][1]
-            )
-        ).T)
+        self.dcm = BaseSystem(np.eye(3))
         self.omega = BaseSystem(np.vstack((0., 0., 0.)))
         self.mass = mass
         self.J = J
@@ -61,19 +35,9 @@ class Load(BaseEnv):
 
 
 class Link(BaseEnv):
-    def __init__(self, length, anchor, uvec_bound):
+    def __init__(self, length, anchor):
         super().__init__()
-        self.uvec = BaseSystem(rot.sph2cart2(
-            1,
-            np.random.uniform(
-                low=uvec_bound[0][0],
-                high=uvec_bound[0][1]
-            ),
-            np.random.uniform(
-                low=uvec_bound[1][0],
-                high=uvec_bound[1][1]
-            )
-        ))
+        self.uvec = BaseSystem(np.vstack((0., 0., -1.)))
         self.omega = BaseSystem(np.vstack((0., 0., 0.)))
         self.len = length
         self.anchor = anchor
@@ -104,15 +68,12 @@ class MultiQuadSlungLoad(BaseEnv):
                          ode_step_len=cfg.ode_step_len)
         self.cfg = cfg
         self.load = Load(
-            cfg.load.pos_bound,
-            cfg.load.att_bound,
             cfg.load.mass,
             cfg.load.J
         )
         self.links = core.Sequential(**{f"link{i:02d}": Link(
             cfg.link.len[i],
             cfg.link.anchor[i],
-            cfg.link.uvec_bound
         ) for i in range(cfg.quad.num)})
         self.quads = core.Sequential(**{f"quad{i:02d}": Quadrotor(
             cfg.quad.mass,
@@ -123,18 +84,51 @@ class MultiQuadSlungLoad(BaseEnv):
         self.eye = np.eye(3)
 
         self.iscollision = False
+        self.P_anchor = np.block([
+            [np.eye(3)]*self.cfg.quad.num,
+            [hat(self.cfg.link.anchor[i]) for i in range(self.cfg.quad.num)]
+        ])
+        self.P_anchor_sudo = self.P_anchor.T.dot(
+            nla.inv(self.P_anchor.dot(self.P_anchor.T))
+        )
 
-    def reset(self, des, fixed_init=False):
-        load_pos_des, load_att_des, _ = des
+    def reset(self, fixed_init=False):
         super().reset()
         if fixed_init:
-            self.load.pos.state = self.cfg.load.pos_init
-            self.load.dcm.state = self.cfg.load.dcm_init
-
-            uvec_init = np.vstack((0., 0., -1.))
-            for link in self.links.systems:
-                link.uvec.state = uvec_init
-        obs = self.observe(load_pos_des, load_att_des)
+            f_des_init = [10.] * self.cfg.quad.num
+        else:
+            for link, quad in zip(self.links.systems, self.quads.systems):
+                link.uvec.state = rot.sph2cart2(
+                    1,
+                    random.uniform(
+                        low=self.cfg.link.uvec_bound[0][0],
+                        high=self.cfg.link.uvec_bound[0][1]
+                    ),
+                    random.uniform(
+                        low=self.cfg.link.uvec_bound[1][0],
+                        high=self.cfg.link.uvec_bound[1][1]
+                    )
+                )
+                omega_tmp = np.vstack((
+                    random.uniform(low=-0.5, high=0.5),
+                    random.uniform(low=-0.5, high=0.5),
+                    random.uniform(low=-0.5, high=0.5)
+                ))
+                link.omega.state = omega_tmp - np.dot(
+                    omega_tmp.reshape(-1,), link.uvec.state.reshape(-1,)
+                ) * link.uvec.state
+                quad.dcm.state = rot.angle2dcm(
+                    random.uniform(low=-np.pi/6, high=np.pi/6),
+                    random.uniform(low=-np.pi/6, high=np.pi/6),
+                    0
+                )
+            f_des_init = [random.uniform(
+                low=-self.cfg.ddpg.action_scaling[0].item() \
+                + self.cfg.ddpg.action_bias[0].item(),
+                high=self.cfg.ddpg.action_scaling[0].item() \
+                + self.cfg.ddpg.action_bias[0].item()
+            )] * self.cfg.quad.num
+        obs = self.observe(f_des_init)
         return obs
 
     def set_dot(self, t, quad_att_des, f_des):
@@ -200,7 +194,7 @@ class MultiQuadSlungLoad(BaseEnv):
 
         J_bar = self.load.J - S7
         J_hat = self.load.J + S3
-        J_hat_inv = np.linalg.inv(J_hat)
+        J_hat_inv = nla.inv(J_hat)
         Mq = m_T*self.eye + S4
         A = -J_hat_inv.dot(S5)
         B = J_hat_inv.dot(S6 - omega_hat.dot(J_bar.dot(omega)))
@@ -223,7 +217,6 @@ class MultiQuadSlungLoad(BaseEnv):
             u = f_des[i] * R.dot(self.e3)
             R0_omega_square_rho = R0.dot(omega_hat_square.dot(rho))
             D = R0.dot(hat(rho).dot(load_ang_acc)) + self.g + u/m
-
             link_ang_acc = q_hat.dot(load_acc + R0_omega_square_rho - D) / l
             link.set_dot(link_ang_acc)
 
@@ -243,14 +236,21 @@ class MultiQuadSlungLoad(BaseEnv):
         # f_des = 3*[25]
         load_pos_des, load_att_des, psi_des = des
         quad_att_des, f_des = self.transform_action2des(action, psi_des)
-        *_, time_out = self.update(quad_att_des=quad_att_des, f_des = f_des)
+        *_, time_out = self.update(quad_att_des=quad_att_des, f_des=f_des)
         done = self.terminate(time_out)
-        obs = self.observe(load_pos_des, load_att_des)
-        reward = self.get_reward(load_pos_des, load_att_des)
+        obs = self.observe(f_des)
+        reward, tension, tension_des, e = self.get_reward(
+            load_pos_des,
+            load_att_des,
+            f_des
+        )
         info = {
             'time': self.clock.get(),
             'reward': reward,
             'action': action,
+            'tension': tension,
+            'tension_des': tension_des,
+            'error': e,
         }
         return obs, reward, done, info
 
@@ -261,7 +261,6 @@ class MultiQuadSlungLoad(BaseEnv):
         quad_att = [None]*self.cfg.quad.num
         anchor_pos = [None]*self.cfg.quad.num
         distance_btw_quad2anchor = [None]*self.cfg.quad.num
-        # check_dynamics = [None]*self.cfg.quad.num
         for i, (link, quad) in enumerate(
                 zip(self.links.systems, self.quads.systems)
         ):
@@ -269,10 +268,8 @@ class MultiQuadSlungLoad(BaseEnv):
                 + self.load.dcm.state.dot(link.anchor) \
                 - link.len*link.uvec.state
             quad_vel[i] = self.load.vel.state \
-                + self.load.dcm.state.dot(
-                    hat(self.load.omega.state).dot(link.anchor)
-                ) \
-                - link.len*hat(link.omega.state).dot(link.uvec.state)
+                + self.load.dcm.dot.dot(link.anchor) \
+                - link.len*link.uvec.dot
             quad_att[i] = np.array(rot.dcm2angle(quad.dcm.state.T))[::-1]
             anchor_pos[i] = self.load.pos.state \
                 + self.load.dcm.state.dot(link.anchor)
@@ -282,18 +279,38 @@ class MultiQuadSlungLoad(BaseEnv):
                     + (quad_pos[i][1][0] - anchor_pos[i][1][0])**2 \
                     + (quad_pos[i][2][0] - anchor_pos[i][2][0])**2
                 )
-            if distance_btw_quad2anchor[i] < 0.1 or distance_btw_quad2anchor[i] > 1.:
-                print('problem!')
-            # check_dynamics[i] = np.dot(
-            #     links[f'link{i:02d}']['uvec'].reshape(-1, ),
-            #     links[f'link{i:02d}']['omega'].reshape(-1,)
-            # )
         distance_btw_quads = self.check_collision(quad_pos)
         return dict(time=t, **self.observe_dict(), load_att=load_att,
                     anchor_pos=anchor_pos, quad_vel=quad_vel,
                     quad_att=quad_att, quad_pos=quad_pos,
                     distance_btw_quads=distance_btw_quads,
                     distance_btw_quad2anchor=distance_btw_quad2anchor)
+
+    def design_desired_FM(self, load_pos_des, load_dcm_des):
+        e_pos = self.load.pos.state - load_pos_des
+        e_vel = self.load.vel.state
+        e_dcm = 0.5 * unhat(
+            load_dcm_des.T.dot(self.load.dcm.state) \
+            - self.load.dcm.state.T.dot(load_dcm_des)
+        )
+        e_omega = self.load.omega.state
+        F_d = self.load.mass * (
+            -self.cfg.controller.Kpos * e_pos \
+            -self.cfg.controller.Kvel * e_vel \
+            - self.g
+        )
+        M_d = -self.cfg.controller.Kdcm * e_dcm \
+            - self.cfg.controller.Komega * e_omega
+        return F_d, M_d
+
+    def calculate_desired_tension(self, F_d, M_d):
+        load_dcm_block = block_diag(self.load.dcm.state, self.cfg.quad.num)
+        tension_des = load_dcm_block.dot(
+            self.P_anchor_sudo.dot(
+                np.vstack((self.load.dcm.state.T.dot(F_d), M_d))
+            )
+        ).reshape(-1, self.cfg.quad.num).tolist()
+        return tension_des
 
     def check_collision(self, quads_pos):
         distance = [
@@ -350,38 +367,49 @@ class MultiQuadSlungLoad(BaseEnv):
         ) + omega_hat.dot(J.dot(omega))
         return M
 
-    def observe(self, load_pos_des, load_att_des):
-        obs = [np.array(rot.cart2sph2(link.uvec.state))[1::]
-               for link in self.links.systems]
-        load_pos = self.load.pos.state
-        load_att = np.vstack(rot.dcm2angle(self.load.dcm.state.T))[::-1]
-        e_load_pos = load_pos - load_pos_des
-        e_load_att = load_att - load_att_des
-        obs.append(e_load_pos.reshape(-1,))
-        obs.append(e_load_att.reshape(-1,))
-        return np.hstack(obs)
+    def observe(self, f_des):
+        obs = [None] * self.cfg.quad.num
+        for i, (link, quad) in enumerate(
+            zip(self.links.systems, self.quads.systems)
+        ):
+            _, azi, polar = rot.cart2sph2(link.uvec.state)
+            u = f_des[i] * quad.dcm.state.dot(self.e3)
+            obs[i] = np.hstack([
+                np.array([azi, polar]),
+                link.uvec.dot.reshape(-1,),
+                u.reshape(-1,)
+            ]).reshape(1,-1)
 
-    def get_reward(self, load_pos_des, load_att_des):
-        error = self.observe(load_pos_des, load_att_des)[0:6]
-        load_pos = self.load.pos.state
-        if (load_pos[2] < 0 or self.iscollision):
-            r = -np.array([self.cfg.ddpg.reward_max])
-        else:
-            r = -np.transpose(error).dot(
-                self.cfg.ddpg.P.dot(error)
-            ).reshape(-1,)
-        r_scaled = (r/(self.cfg.ddpg.reward_max/2)+1)*10
-        return r_scaled
+        return obs
+
+    def get_reward(self, load_pos_des, load_dcm_des, f_des):
+        F_d, M_d = self.design_desired_FM(load_pos_des, load_dcm_des)
+        tension_des = self.calculate_desired_tension(F_d, M_d)
+        reward = [None]*self.cfg.quad.num
+        tension = [None]*self.cfg.quad.num
+        e = [None]*self.cfg.quad.num
+        for i, quad in enumerate(self.quads.systems):
+            u = f_des[i] * quad.dcm.state.dot(self.e3)
+            tension[i] = quad.mass*self.g + u
+            e[i] = tension[i] - np.vstack(tension_des[i])
+            reward[i] = -e[i].T.dot(e[i]).reshape(-1,)
+            # mag, azi, polar = rot.cart2sph2(tension[i])
+            # mag_des, azi_des, polar_des = rot.cart2sph2(
+            #     np.array(tension_des[i])
+            # )
+            # e[i] = np.array([mag-mag_des, azi-azi_des, polar-polar_des])
+            # reward[i] = -e[i].dot(self.cfg.ddpg.P.dot(e[i].T)).reshape(-1,)
+        return reward, tension, tension_des, e
 
     def transform_action2des(self, action, psi_des):
         f_des = [None]*self.cfg.quad.num
         quad_att_des = [None]*self.cfg.quad.num
         for i in range(self.cfg.quad.num):
-            chi, gamma = action[3*i+1:3*i+3]
+            chi, gamma = action[i][1:3]
             u_des = rot.sph2cart2(1, chi, gamma)
             phi, theta = self.find_euler(u_des, psi_des[i])
             quad_att_des[i] = np.vstack((phi, theta, psi_des[i]))
-            f_des[i] = action[3*i]
+            f_des[i] = action[i][0]
         return quad_att_des, f_des
 
     def find_euler(self, vec, psi):

@@ -25,8 +25,8 @@ def load_config():
     cfg = SN()
     cfg.epi_train = 1
     cfg.epi_eval = 1
-    cfg.dt = 0.1
-    cfg.max_t = 5.
+    cfg.dt = 0.01
+    cfg.max_t = 3.
     cfg.solver = 'odeint'
     cfg.ode_step_len = 10
     cfg.dir = Path('log', datetime.today().strftime('%Y%m%d-%H%M%S'))
@@ -60,7 +60,7 @@ def load_config():
     cfg.load.cg = np.vstack((0., 0., -0.7))
     cfg.load.size = 1.
     cfg.load.pos_des = np.vstack((0., 0., 5.))
-    cfg.load.att_des = np.vstack((0., 0., 0.))
+    cfg.load.dcm_des = np.eye(3)
 
     cfg.link = SN()
     cfg.link.len = cfg.quad.num * [0.5]
@@ -78,16 +78,24 @@ def load_config():
     cfg.controller.Ks = 80.
     cfg.controller.chattering_bound = 0.5
     cfg.controller.unc_max = 0.1
+    cfg.controller.Kpos = 1.
+    cfg.controller.Kvel = 0.5
+    cfg.controller.Kdcm = 0.1
+    cfg.controller.Komega = 0.05
 
     cfg.ddpg = SN()
-    cfg.ddpg.P = np.diag([1., 1., 1., 5., 5., 2.])
+    cfg.ddpg.P = np.diag([1., 1., 1.])
     cfg.ddpg.reward_max = 120
-    cfg.ddpg.state_dim = 6 + 2*cfg.quad.num
-    cfg.ddpg.action_dim = 3*cfg.quad.num
-    cfg.ddpg.action_scaling = torch.Tensor(
-        cfg.quad.num * [2.5, np.pi, np.pi/12]
+    cfg.ddpg.state_dim = 8
+    cfg.ddpg.action_dim = 3
+    cfg.ddpg.action_scaling = torch.tensor(
+        [3., np.pi, np.pi/12],
+        requires_grad=True
     )
-    cfg.ddpg.action_bias = torch.Tensor(cfg.quad.num * [12.5, 0, np.pi/12])
+    cfg.ddpg.action_bias = torch.tensor(
+        [15., 0., np.pi/12],
+        requires_grad=True
+    )
     cfg.ddpg.memory_size = 20000
     cfg.ddpg.actor_lr = 0.0001
     cfg.ddpg.critic_lr = 0.001
@@ -96,10 +104,9 @@ def load_config():
     cfg.ddpg.batch_size = 64
 
     cfg.noise = SN()
-    cfg.noise.rho = 0.15
-    cfg.noise.mu = 0.
-    cfg.noise.sigma = 0.2
-    cfg.noise.size = 9
+    cfg.noise.rho = np.array([0.15, 0.01, 0.01])
+    cfg.noise.mu = np.array([0., 0., 0.])
+    cfg.noise.sigma = np.array([0.2, 0.01, 0.2])
 
     return cfg
 
@@ -109,24 +116,24 @@ class ActorNet(nn.Module):
         super(ActorNet, self).__init__()
         self.lin1 = nn.Linear(cfg.ddpg.state_dim, 32)
         self.lin2 = nn.Linear(32, 64)
-        self.lin3 = nn.Linear(64, 128)
-        self.lin4 = nn.Linear(128, 64)
-        self.lin5 = nn.Linear(64, 32)
-        self.lin6 = nn.Linear(32, 16)
-        self.lin7 = nn.Linear(16, cfg.ddpg.action_dim)
+        self.lin3 = nn.Linear(64, 32)
+        self.lin4 = nn.Linear(32, 16)
+        self.lin5 = nn.Linear(16, cfg.ddpg.action_dim)
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
+        self.bn1 = nn.BatchNorm1d(32)
+        self.bn2 = nn.BatchNorm1d(64)
+        self.bn3 = nn.BatchNorm1d(32)
+        self.bn4 = nn.BatchNorm1d(16)
         self.cfg = cfg
 
     def forward(self, state):
-        x1 = self.relu(self.lin1(state))
-        x2 = self.relu(self.lin2(x1))
-        x3 = self.relu(self.lin3(x2))
-        x4 = self.relu(self.lin4(x3))
-        x5 = self.relu(self.lin5(x4))
-        x6 = self.relu(self.lin6(x5))
-        x7 = self.tanh(self.lin7(x6))
-        x_scaled = x7 * self.cfg.ddpg.action_scaling \
+        x1 = self.relu(self.bn1(self.lin1(state)))
+        x2 = self.relu(self.bn2(self.lin2(x1)))
+        x3 = self.relu(self.bn3(self.lin3(x2)))
+        x4 = self.relu(self.bn4(self.lin4(x3)))
+        x5 = self.tanh(self.lin5(x4))
+        x_scaled = x5 * self.cfg.ddpg.action_scaling \
             + self.cfg.ddpg.action_bias
         return x_scaled
 
@@ -141,15 +148,21 @@ class CriticNet(nn.Module):
         self.lin6 = nn.Linear(32, 16)
         self.lin7 = nn.Linear(16, 1)
         self.relu = nn.ReLU()
+        self.bn1 = nn.BatchNorm1d(32)
+        self.bn2 = nn.BatchNorm1d(64)
+        self.bn3 = nn.BatchNorm1d(128)
+        self.bn4 = nn.BatchNorm1d(64)
+        self.bn5 = nn.BatchNorm1d(32)
+        self.bn6 = nn.BatchNorm1d(16)
 
     def forward(self, state_w_action):
-        x1 = self.relu(self.lin1(state_w_action))
-        x2 = self.relu(self.lin2(x1))
-        x3 = self.relu(self.lin3(x2))
-        x4 = self.relu(self.lin4(x3))
-        x5 = self.relu(self.lin5(x4))
-        x6 = self.relu(self.lin6(x5))
-        x7 = self.relu(self.lin7(x6))
+        x1 = self.relu(self.bn1(self.lin1(state_w_action)))
+        x2 = self.relu(self.bn2(self.lin2(x1)))
+        x3 = self.relu(self.bn3(self.lin3(x2)))
+        x4 = self.relu(self.bn4(self.lin4(x3)))
+        x5 = self.relu(self.bn5(self.lin5(x4)))
+        x6 = self.relu(self.bn6(self.lin6(x5)))
+        x7 = self.lin7(x6)
         return x7
 
 
@@ -184,11 +197,16 @@ class DDPG:
     def get_sample(self):
         sample = random.sample(self.memory, self.cfg.ddpg.batch_size)
         state, action, reward, state_next, epi_done = zip(*sample)
-        x = torch.tensor(state, requires_grad=True).float()
-        u = torch.tensor(action, requires_grad=True).float()
-        r = torch.tensor(reward, requires_grad=True).float()
-        xn = torch.tensor(state_next, requires_grad=True).float()
-        done = torch.tensor(epi_done, requires_grad=True).float().view(-1,1)
+        # x = torch.tensor(state, requires_grad=True).float()
+        # u = torch.tensor(action, requires_grad=True).float()
+        # r = torch.tensor(reward, requires_grad=True).float()
+        # xn = torch.tensor(state_next, requires_grad=True).float()
+        # done = torch.tensor(epi_done, requires_grad=True).float().view(-1,1)
+        x = torch.FloatTensor(state)
+        u = torch.FloatTensor(action)
+        r = torch.FloatTensor(reward)
+        xn = torch.FloatTensor(state_next)
+        done = torch.FloatTensor(epi_done).view(-1,1)
         return x, u, r, xn, done
 
     def train(self):
@@ -203,12 +221,23 @@ class DDPG:
         critic_loss.backward()
         self.critic_optim.step()
 
+        # Q_w_noise_action_tmp = self.behavior_critic(torch.cat([x,u], 1))
+        # critic_loss_tmp = self.mse(Q_w_noise_action_tmp, target)
+        # if critic_loss_tmp - critic_loss == 0.:
+        #     print("Critic loss does not change:", critic_loss_tmp-critic_loss)
+
         action_wo_noise = self.behavior_actor(x)
         Q = self.behavior_critic(torch.cat([x, action_wo_noise],1))
         self.actor_optim.zero_grad()
         actor_loss = torch.sum(-Q)
         actor_loss.backward()
         self.actor_optim.step()
+
+        # action_wo_noise_tmp = self.behavior_actor(x)
+        # Q_tmp = self.behavior_critic(torch.cat([x, action_wo_noise_tmp],1))
+        # actor_loss_tmp = torch.sum(-Q_tmp)
+        # if actor_loss_tmp - actor_loss == 0.:
+        #     print("Actor loss does not change:", actor_loss_tmp-actor_loss)
 
         softupdate(
             self.target_actor,
@@ -227,20 +256,52 @@ class DDPG:
             'behavior_critic': self.behavior_critic.state_dict()
         }, path_save)
 
+    def set_train_mode(self):
+        self.behavior_actor.train()
+        self.behavior_critic.train()
+        self.target_actor.train()
+        self.target_critic.train()
+
+    def set_eval_mode(self):
+        self.behavior_actor.eval()
+        self.behavior_critic.eval()
+        self.target_actor.eval()
+        self.target_critic.eval()
+
 
 def train(agent, des, cfg, noise, env):
-    x = env.reset(des)
+    x = env.reset()
     noise.reset()
+    action = [None]*cfg.quad.num
     while True:
-        action = np.clip(
-            agent.get_action(x) + noise.get_noise(),
-            np.array(-cfg.ddpg.action_scaling + cfg.ddpg.action_bias),
-            np.array(cfg.ddpg.action_scaling + cfg.ddpg.action_bias)
-        )
+        agent.set_eval_mode()
+        # noise_set = np.array([
+        #     noise.get_noise(),
+        #     noise.get_noise(),
+        #     noise.get_noise()
+        # ])
+        for i in range(cfg.quad.num):
+            noise = np.array([
+                np.random.normal(),
+                np.random.normal(scale=0.1),
+                np.random.normal(scale=0.03)
+            ])
+            action[i] = np.clip(
+                agent.get_action(x[i]) + noise,
+                -cfg.ddpg.action_scaling.detach().numpy() \
+                + cfg.ddpg.action_bias.detach().numpy(),
+                cfg.ddpg.action_scaling.detach().numpy() \
+                + cfg.ddpg.action_bias.detach().numpy()
+            )
+
         xn, r, done, _ = env.step(action, des)
-        agent.memorize((x, action, r, xn, done))
+        for i in range(cfg.quad.num):
+            item = (x[i], action[i], r[i], xn[i], done)
+            agent.memorize(item)
+        # agent.memorize((x, action, r, xn, done))
         x = xn
         if len(agent.memory) > 5 * cfg.ddpg.batch_size:
+            agent.set_train_mode()
             agent.train()
         if done:
             break
@@ -248,12 +309,15 @@ def train(agent, des, cfg, noise, env):
 
 
 def evaluate(env, agent, des, cfg, dir_env_data, dir_agent_data):
+    agent.set_eval_mode()
     env.logger = logging.Logger(dir_env_data)
     env.logger.set_info(cfg=cfg)
     logger_agent = logging.Logger(dir_agent_data)
-    x = env.reset(des, fixed_init=True)
+    x = env.reset(fixed_init=True)
+    action = [None] * cfg.quad.num
     while True:
-        action = agent.get_action(x)
+        for i in range(cfg.quad.num):
+            action[i] = agent.get_action(x[i])
         xn, _, done, info = env.step(action, des)
         logger_agent.record(**info)
         x = xn
@@ -271,11 +335,11 @@ def main():
     noise = OrnsteinUhlenbeckNoise(
         cfg.noise.rho,
         cfg.noise.mu,
-        np.array(cfg.ddpg.action_scaling),
+        cfg.ddpg.action_scaling.detach().numpy(),
         cfg.dt,
         cfg.ddpg.action_dim
     )
-    des = [cfg.load.pos_des, cfg.load.att_des, cfg.quad.psi_des]
+    des = [cfg.load.pos_des, cfg.load.dcm_des, cfg.quad.psi_des]
 
     for epi_num in tqdm(range(cfg.epi_train)):
         train(agent, des, cfg, noise, env)
@@ -284,7 +348,7 @@ def main():
             dir_save = Path(cfg.dir, f"epi_after_{epi_num+1:05d}")
             dir_env_data = Path(dir_save, "env_data.h5")
             dir_agent_data = Path(dir_save, "agent_data.h5")
-            dir_agent_params = Path(dir_save, "agent_params.h5")
+            dir_agent_params = Path(dir_save, "agent_params.pt")
 
             evaluate(env, agent, des, cfg, dir_env_data, dir_agent_data)
             draw_plot(dir_env_data, dir_agent_data, dir_save)

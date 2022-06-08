@@ -5,6 +5,8 @@ from matplotlib.animation import FuncAnimation
 import mpl_toolkits.mplot3d.art3d as art3d
 import mpl_toolkits.mplot3d.axes3d as axes3d
 from matplotlib.patches import Circle
+import os
+from glob import glob
 
 import fym.logging as logging
 from fym.utils import rot
@@ -39,6 +41,7 @@ def softupdate(target, behavior, softupdate_const):
         )
 
 def hardupdate(target, behavior):
+    target.load_state_dict(behavior.state_dict())
     for targetParam, behaviorParam in zip(
             target.parameters(),
             behavior.parameters()
@@ -53,8 +56,18 @@ def hat(v):
         [-v2, v1, 0]
     ])
 
+def unhat(R):
+    return np.vstack((R[1][0], R[0][2], R[2][1]))
+
 def wrap(angle):
     return (angle+np.pi) % (2*np.pi) - np.pi
+
+def block_diag(R, num):
+    rows, cols = R.shape
+    result = np.zeros((num, rows, num, cols), dtype=R.dtype)
+    diag = np.einsum('ijik->ijk', result)
+    diag[:] = R
+    return result.reshape(rows * num, cols * num)
 
 def split_int(num):
     num_sqrt = np.sqrt(num)
@@ -84,15 +97,35 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
     quad_att_des = np.unwrap(env_data['quad_att_des'], axis=0) * 180/np.pi
     distance_btw_quads = env_data['distance_btw_quads']
     distance_btw_quad2anchor = env_data['distance_btw_quad2anchor']
+    link = env_data['links']
 
     time_agent = agent_data['time']
     action = agent_data['action']
     reward = agent_data['reward']
-    # anchor_pos = env_data['anchor_pos']
-    # check_dynamics = env_data['check_dynamics']
-    # breakpoint()
+    tension = agent_data['tension']
+    tension_des = agent_data['tension_des']
+    error = agent_data['error']
 
     for i in range(cfg.quad.num):
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        ax[0].plot(time, link[f"link{i:02d}"]['omega'][:,0,0])
+        ax[1].plot(time, link[f"link{i:02d}"]['omega'][:,1,0])
+        ax[2].plot(time, link[f"link{i:02d}"]['omega'][:,2,0])
+        ax[0].set_title(f"Angular velocity of link {i}")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[0].set_ylabel("$\omega_x$ [rad/s]")
+        ax[1].set_ylabel("$\omega_y$ [rad/s]")
+        ax[2].set_ylabel("$\omega_z$ [rad/s]")
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(
+            Path(dir_save, f"link_{i}_omega.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
+
         fig, ax = plt.subplots(nrows=3, ncols=1)
         ax[0].plot(time, quad_pos[:,i,0])
         ax[1].plot(time, quad_pos[:,i,1])
@@ -193,9 +226,9 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
         plt.close('all')
 
         fig, ax = plt.subplots(nrows=3, ncols=1)
-        ax[0].plot(time_agent, action[:,cfg.quad.num*i])
-        ax[1].plot(time_agent, action[:,cfg.quad.num*i+1]*180/np.pi)
-        ax[2].plot(time_agent, action[:,cfg.quad.num*i+2]*180/np.pi)
+        ax[0].plot(time_agent, action[:,i,0])
+        ax[1].plot(time_agent, action[:,i,1]*180/np.pi)
+        ax[2].plot(time_agent, action[:,i,2]*180/np.pi)
         ax[0].set_title(f"Action of Quadrotor {i}")
         ax[0].axes.xaxis.set_ticklabels([])
         ax[1].axes.xaxis.set_ticklabels([])
@@ -210,6 +243,48 @@ def draw_plot(dir_env_data, dir_agent_data, dir_save):
             bbox_inches='tight'
         )
         plt.close('all')
+
+        fig, ax = plt.subplots(nrows=3, ncols=1)
+        line1, = ax[0].plot(time_agent, tension[:,i,0], 'r')
+        line2, = ax[0].plot(time_agent, tension_des[:,i,0], 'b--')
+        ax[0].legend(handles=(line1, line2), labels=('estimates', 'des.'))
+        ax[1].plot(time_agent, tension[:,i,1], 'r',
+                   time_agent, tension_des[:,i,1], 'b--')
+        ax[2].plot(time_agent, tension[:,i,2], 'r',
+                   time_agent, tension_des[:,i,2], 'b--')
+        ax[0].set_title(f"Desired tension and estimates of Quadrotor {i}")
+        ax[0].axes.xaxis.set_ticklabels([])
+        ax[1].axes.xaxis.set_ticklabels([])
+        ax[0].set_ylabel("X [N]")
+        ax[1].set_ylabel("Y [N]")
+        ax[2].set_ylabel("Z [N]")
+        ax[2].set_xlabel("time [s]")
+        [ax[i].grid(True) for i in range(3)]
+        fig.align_ylabels(ax)
+        fig.savefig(
+            Path(dir_save, f"quad_{i}_tension.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
+
+    # fig, ax = plt.subplots(nrows=3, ncols=1)
+    # ax[0].plot(time_agent, reward[:,0,0])
+    # ax[1].plot(time_agent, reward[:,1,0])
+    # ax[2].plot(time_agent, reward[:,2,0])
+    # ax[0].set_title(f"Reward History of Quadrotors")
+    # ax[0].axes.xaxis.set_ticklabels([])
+    # ax[1].axes.xaxis.set_ticklabels([])
+    # ax[0].set_ylabel("Quad 1")
+    # ax[1].set_ylabel("Quad 2")
+    # ax[2].set_ylabel("Quad 2")
+    # ax[2].set_xlabel("time [s]")
+    # [ax[i].grid(True) for i in range(3)]
+    # fig.align_ylabels(ax)
+    # fig.savefig(
+    #     Path(dir_save, f"reward history.png"),
+    #     bbox_inches='tight'
+    # )
+    # plt.close('all')
 
     fig, ax = plt.subplots(nrows=3, ncols=1)
     ax[0].plot(time, load_pos[:,0])
@@ -537,6 +612,7 @@ class Animator:
             load_verts = data['anchor_pos'][frame].squeeze().tolist()
             load_cg = data['load']['pos'][frame].squeeze().tolist()
             ax.load.set(load_verts, load_cg)
+            breakpoint()
 
             for i in range(self.cfg.quad.num):
                 ax.quad[i].set(
@@ -550,7 +626,9 @@ class Animator:
         return self.frame_artists
 
     def animate(self, *args, **kwargs):
-        frames = range(0, len(self.data_list[0]['time']), 10)
+        data_len = [len(self.data_list[i]['time'])
+                    for i in range(self.len)]
+        frames = range(0, min(data_len), 10)
         self.anim = FuncAnimation(
             self.fig, self.update, init_func=self.init,
             frames=frames, interval=200, blit=True,
@@ -563,7 +641,8 @@ class Animator:
 
 def compare_episode(past, ani=True):
     dir_save = list(Path('log').glob("*"))[past]
-    epi_list = [x for x in dir_save.glob("*")]
+    # epi_list = [x for x in dir_save.glob("* ")]
+    epi_list = glob(os.path.join(dir_save, "*", ""))
     env_data_list = [
         logging.load(Path(epi_dir, "env_data.h5")) for epi_dir in epi_list
     ]
@@ -592,23 +671,29 @@ def compare_episode(past, ani=True):
 
     return_list = []
     for i, data in enumerate(agent_data_list):
-        G = 0
+        G = [0]*cfg.quad.num
         for r in data['reward'][::-1]:
-            G = r.item() + cfg.ddpg.discount*G
-        return_list.append([(i+1)*cfg.epi_eval, G])
+            for j in range(cfg.quad.num):
+                G[j] = r[j].item() + cfg.ddpg.discount*G[j]
+            # G = r.item() + cfg.ddpg.discount*G
+        return_list_tmp = [(i+1)*cfg.epi_eval]
+        for j in range(cfg.quad.num):
+            return_list_tmp.append(G[j])
+        return_list.append(return_list_tmp)
     return_list = np.array(return_list)
 
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(return_list[:,0], return_list[:,1], "*")
-    ax.set_title("Return")
-    ax.set_ylabel("Return")
-    ax.set_xlabel("Episode")
-    ax.grid(True)
-    fig.savefig(
-        Path(dir_save, "return.png"),
-        bbox_inches='tight'
-    )
-    plt.close('all')
+    for i in range(cfg.quad.num):
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+        ax.plot(return_list[:,0], return_list[:,i+1], "*")
+        ax.set_title(f"Return for {i}th quadrotor")
+        ax.set_ylabel("Return")
+        ax.set_xlabel("Episode")
+        ax.grid(True)
+        fig.savefig(
+            Path(dir_save, f"return_quad_{i}.png"),
+            bbox_inches='tight'
+        )
+        plt.close('all')
 
 
 
